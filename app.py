@@ -882,12 +882,12 @@ with tab5:
     )
     c2.markdown(
         f"<div class='big-metric'>{creados_ano}</div>"
-        f"<div class='metric-label'>Productos creados en {year} (con responsable)</div>",
+        f"<div class='metric-label'>Productos creados en {year}</div>",
         unsafe_allow_html=True,
     )
     c3.markdown(
         f"<div class='big-metric'>{actualizados_ano}</div>"
-        f"<div class='metric-label'>Productos actualizados en {year} (con responsable)</div>",
+        f"<div class='metric-label'>Productos actualizados en {year}</div>",
         unsafe_allow_html=True,
     )
 
