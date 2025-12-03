@@ -2,9 +2,10 @@
 # -----------------------------------------------------------
 # Dashboard de Usabilidad Soluquim
 #   - Lee empresas.csv (misma carpeta)
-#   - Sesiones por usuario+empresa
-#   - Modo de sesión: por Ingreso a login o por inactividad
-#   - Métricas: frecuencia, profundidad, conversión, ranking
+#   - Sesiones por empresa+usuario:
+#       * Por inicio de sesión (Ingreso a login)
+#       * Por inactividad del usuario (X min sin eventos)
+#   - Métricas: frecuencia, profundidad, conversión, índice de usabilidad
 # -----------------------------------------------------------
 
 import streamlit as st
@@ -58,42 +59,44 @@ df_raw = load_data()
 # -----------------------------------------------------------
 def preparar_sesiones(
     df: pd.DataFrame,
+    modo_sesion: str = "login",
     session_timeout: int = 30,
-    modo_sesion: str = "ingreso",
 ) -> pd.DataFrame:
     """
-    Crea session_id por empresa+usuario sobre el DF YA FILTRADO.
+    Crea session_id por empresa+usuario.
 
-    - modo_sesion = "ingreso":
-        Cada evento 'Ingreso a login' inicia nueva sesión por empresa+usuario.
-    - modo_sesion = "inactividad":
-        Se corta sesión por tiempo de inactividad > session_timeout (min).
+    - modo_sesion = 'login':
+        Sesión = desde un evento 'Ingreso a login' hasta el siguiente
+        para ese (empresa, usuario).
+    - modo_sesion = 'inactividad':
+        Sesión = bloque de acciones del mismo (empresa, usuario)
+        sin pausas mayores a session_timeout minutos.
+
+    El tiempo de inactividad SIEMPRE se calcula por usuario (id) en cada empresa.
     """
     df = df.copy().sort_values(["empresa", "usuario", "created_at"])
     group_keys = ["empresa", "usuario"]
 
-    if modo_sesion == "ingreso":
+    if modo_sesion == "login":
         df["es_ingreso"] = df["function_used"].str.contains(
             "Ingreso a login", case=False, na=False
         )
         df["sesion_local"] = df.groupby(group_keys)["es_ingreso"].cumsum()
         df["sesion_local"] = df["sesion_local"].where(df["sesion_local"] > 0, 1)
-        df["diff_min"] = np.nan
-        df["nueva_sesion"] = df["es_ingreso"]
 
     elif modo_sesion == "inactividad":
         df["diff_min"] = (
             df.groupby(group_keys)["created_at"]
-            .diff()
-            .dt.total_seconds()
-            .div(60)
+              .diff()
+              .dt.total_seconds()
+              .div(60)
         )
         df["nueva_sesion"] = df["diff_min"].isna() | (df["diff_min"] > session_timeout)
         df["sesion_local"] = df.groupby(group_keys)["nueva_sesion"].cumsum()
     else:
-        raise ValueError("modo_sesion debe ser 'ingreso' o 'inactividad'.")
+        raise ValueError("modo_sesion debe ser 'login' o 'inactividad'")
 
-    # session_id legible pero único
+    # Identificador legible de sesión
     df["session_id"] = (
         df["empresa"].astype(str)
         + " | U:"
@@ -124,30 +127,44 @@ def bucket_acciones(n: int) -> str:
         return "11+ acciones"
 
 
+def minmax(col: pd.Series) -> pd.Series:
+    """Normalización min–max a rango 0–1."""
+    vmin, vmax = col.min(), col.max()
+    if vmax > vmin:
+        return (col - vmin) / (vmax - vmin)
+    else:
+        # Si todas tienen el mismo valor, no hay diferencia: todo 0
+        return pd.Series(0.0, index=col.index)
+
 # -----------------------------------------------------------
-# TÍTULO Y DESCRIPCIÓN
+# TÍTULO Y GLOSARIO
 # -----------------------------------------------------------
 st.title("📊 Dashboard de Usabilidad – Soluquim")
 st.caption(
-    "Explora cómo las empresas y usuarios usan la plataforma: frecuencia, profundidad, conversión y ranking de usabilidad."
+    "Analiza cómo las empresas usan Soluquim: frecuencia, profundidad, conversión e índice de usabilidad."
 )
 
 with st.expander("ℹ️ Glosario rápido"):
     st.markdown(
         """
-- **Sesión:** grupo de acciones de un mismo usuario dentro de una empresa.
-- **Profundidad:** cuántas acciones se hacen en promedio en cada sesión.
-- **Conversión:** de las sesiones donde se ve un producto, ¿en qué porcentaje se hace una descarga (FDS o etiqueta)?
-- **Índice de usabilidad:** mezcla de frecuencia (sesiones), profundidad y conversión para comparar empresas.
+- **Sesión** (empresa + usuario):
+  - Por **inicio de sesión**: desde un `Ingreso a login` hasta el siguiente.
+  - Por **inactividad**: bloque continuo de actividad sin pausas mayores al umbral.
+- **Frecuencia:** número de sesiones que abre una empresa.
+- **Profundidad:** acciones promedio por sesión.
+- **Conversión:** de las sesiones donde se ve un producto, porcentaje en el que se hace una descarga (FDS o etiqueta).
+- **Índice de usabilidad (0–1):**
+  - Combina frecuencia (40%), profundidad (30%) y conversión (30%).
+  - Se penaliza cuando hay pocas sesiones (poca evidencia de uso).
         """
     )
 
 # -----------------------------------------------------------
-# SIDEBAR – FILTROS LIMPIOS
+# SIDEBAR – FILTROS
 # -----------------------------------------------------------
 st.sidebar.header("🎯 Alcance del análisis")
 
-# 1) Rango de fechas (primero)
+# 1) Rango de fechas
 min_fecha = df_raw["fecha"].min()
 max_fecha = df_raw["fecha"].max()
 
@@ -156,7 +173,7 @@ rango_fechas = st.sidebar.date_input(
     value=(min_fecha, max_fecha),
     min_value=min_fecha,
     max_value=max_fecha,
-    help="Solo se consideran eventos dentro de este rango de fechas.",
+    help="Solo se consideran eventos dentro de este rango.",
 )
 
 if isinstance(rango_fechas, tuple):
@@ -164,13 +181,13 @@ if isinstance(rango_fechas, tuple):
 else:
     fecha_ini, fecha_fin = rango_fechas, rango_fechas
 
-# 2) Empresa (una o todas, sin lista gigante)
+# 2) Empresa (una o todas)
 empresas_unicas = sorted(df_raw["empresa"].unique())
 opciones_emp = ["Todas las empresas"] + empresas_unicas
 empresa_sel = st.sidebar.selectbox(
     "Empresa",
     options=opciones_emp,
-    help="Puedes ver todas las empresas o enfocarte en una sola.",
+    help="Puedes ver todas las empresas o enfocarte en una.",
 )
 
 if empresa_sel == "Todas las empresas":
@@ -180,35 +197,39 @@ else:
 
 st.sidebar.markdown("---")
 
-# 3) Cómo se cuenta una sesión
+# 3) Sesiones: login vs inactividad por usuario
 st.sidebar.subheader("⚙️ Sesiones")
 
 modo_sesion_label = st.sidebar.radio(
     "¿Cómo quieres contar una sesión?",
-    options=[
-        "Cada vez que el usuario inicia sesión (Ingreso a login)",
-        "Por inactividad (si pasa cierto tiempo sin eventos)",
+    [
+        "Por inicio de sesión (Ingreso a login)",
+        "Por inactividad del usuario (X min sin eventos)",
     ],
 )
 
-if modo_sesion_label.startswith("Cada vez"):
-    modo_sesion = "ingreso"
-    session_timeout = 30  # no se usa realmente en este modo
-    st.sidebar.caption("Sesión = desde un 'Ingreso a login' hasta el siguiente.")
+if modo_sesion_label.startswith("Por inicio"):
+    modo_sesion = "login"
+    session_timeout = 30  # dummy, no se usa
+    st.sidebar.caption(
+        "Sesión = desde un 'Ingreso a login' hasta el siguiente, para ese usuario en esa empresa."
+    )
 else:
     modo_sesion = "inactividad"
     session_timeout = st.sidebar.slider(
-        "Corte por inactividad (minutos)",
+        "Umbral de inactividad por usuario (minutos)",
         min_value=5,
         max_value=90,
         value=30,
         step=5,
-        help="Si pasan más minutos sin eventos de ese usuario, se inicia una nueva sesión.",
+        help="Si un usuario pasa más de este tiempo sin eventos, se corta la sesión.",
     )
-    st.sidebar.caption("Sesión = bloque continuo de actividad sin pausas largas.")
+    st.sidebar.caption(
+        "Sesión = bloque de acciones del mismo usuario sin pausas mayores a este tiempo."
+    )
 
 # -----------------------------------------------------------
-# APLICAR FILTROS A LOS DATOS BASE
+# APLICAR FILTROS Y CONSTRUIR SESIONES
 # -----------------------------------------------------------
 df_filt = df_raw[
     (df_raw["empresa"].isin(empresas_sel))
@@ -216,62 +237,50 @@ df_filt = df_raw[
 ].copy()
 
 if df_filt.empty:
-    st.warning("No hay datos para la empresa/periodo seleccionado.")
+    st.warning("No hay datos para la empresa y el periodo seleccionados.")
     st.stop()
 
-# Construir sesiones SOBRE el dato filtrado
 df = preparar_sesiones(
     df_filt,
-    session_timeout=session_timeout,
     modo_sesion=modo_sesion,
+    session_timeout=session_timeout,
 )
 
 # -----------------------------------------------------------
-# CÁLCULO DE MÉTRICAS
+# MÉTRICAS GLOBALES
 # -----------------------------------------------------------
-
-# Usuarios activos (empresa+usuario) en el periodo filtrado
 usuarios_activos = df[["empresa", "usuario"]].drop_duplicates().shape[0]
-
-# Sesiones y acciones
 acciones_por_sesion = df.groupby("session_id")["function_used"].count()
 
-# Frecuencia diaria básica (la usamos como base para diario/semanal/mensual)
+# Frecuencia diaria (base para curva)
 sesiones_por_dia = (
     df.groupby("fecha")["session_id"]
     .nunique()
     .rename("Sesiones")
     .to_frame()
 )
-sesiones_por_dia.index = pd.to_datetime(sesiones_por_dia.index)  # para resample
+sesiones_por_dia.index = pd.to_datetime(sesiones_por_dia.index)
 
-# Tabla a nivel sesión (para conversión)
+# Conversión global
 sesiones = df.groupby("session_id").agg(
     vio_producto=("es_ver", "max"),
     descargo_fds=("es_fds", "max"),
     descargo_etq=("es_etq", "max"),
 )
 sesiones["descargo_algo"] = sesiones["descargo_fds"] | sesiones["descargo_etq"]
-
 sesiones_con_ver = sesiones[sesiones["vio_producto"]]
 
-conv_fds = (
-    sesiones_con_ver["descargo_fds"].mean()
-    if not sesiones_con_ver.empty
-    else 0.0
-)
-conv_etq = (
-    sesiones_con_ver["descargo_etq"].mean()
-    if not sesiones_con_ver.empty
-    else 0.0
-)
+conv_fds = sesiones_con_ver["descargo_fds"].mean() if not sesiones_con_ver.empty else 0.0
+conv_etq = sesiones_con_ver["descargo_etq"].mean() if not sesiones_con_ver.empty else 0.0
 conv_cualquier = (
-    sesiones_con_ver["descargo_algo"].mean()
-    if not sesiones_con_ver.empty
-    else 0.0
+    sesiones_con_ver["descargo_algo"].mean() if not sesiones_con_ver.empty else 0.0
 )
 
-# Métricas por empresa (a nivel empresa+usuario+session_id)
+# -----------------------------------------------------------
+# MÉTRICAS POR EMPRESA E ÍNDICE DE USABILIDAD
+# -----------------------------------------------------------
+
+# 1) Nivel empresa–usuario–sesión
 sesiones_emp = df.groupby(["empresa", "usuario", "session_id"]).agg(
     eventos=("function_used", "count"),
     vio=("es_ver", "max"),
@@ -279,39 +288,48 @@ sesiones_emp = df.groupby(["empresa", "usuario", "session_id"]).agg(
     etq=("es_etq", "max"),
 )
 
+# 2) Agregado a nivel empresa
 emp = sesiones_emp.groupby("empresa").agg(
-    sesiones=("eventos", "size"),
-    eventos_tot=("eventos", "sum"),
-    profundidad=("eventos", "mean"),
+    sesiones=("eventos", "size"),      # número de sesiones
+    eventos_tot=("eventos", "sum"),    # total de acciones
+    profundidad=("eventos", "mean"),   # acciones promedio por sesión
     conv_fds=("fds", "mean"),
     conv_etq=("etq", "mean"),
 ).fillna(0)
 
+# 3) Conversión promedio
 emp["conv_prom"] = (emp["conv_fds"] + emp["conv_etq"]) / 2
 
-# Normalización para índice de usabilidad
-for col in ["sesiones", "profundidad", "conv_prom"]:
-    if emp[col].max() > emp[col].min():
-        emp[col + "_norm"] = (emp[col] - emp[col].min()) / (
-            emp[col].max() - emp[col].min()
-        )
-    else:
-        emp[col + "_norm"] = 0.0
+# 4) Componentes normalizados (0–1)
+emp["freq_norm"] = minmax(emp["sesiones"])     # frecuencia (sesiones)
+emp["prof_norm"] = minmax(emp["profundidad"])  # profundidad
+emp["conv_norm"] = minmax(emp["conv_prom"])    # conversión
 
-emp["indice"] = (
-    0.4 * emp["sesiones_norm"]
-    + 0.3 * emp["profundidad_norm"]
-    + 0.3 * emp["conv_prom_norm"]
+# 5) Índice base (sin penalizar por volumen)
+w_freq, w_prof, w_conv = 0.4, 0.3, 0.3
+emp["indice_base"] = (
+    w_freq * emp["freq_norm"] +
+    w_prof * emp["prof_norm"] +
+    w_conv * emp["conv_norm"]
 )
 
+# 6) Factor de volumen: penaliza pocas sesiones
+SESIONES_CONFIABLES = 10  # a partir de 10 sesiones ya no hay castigo
+emp["factor_volumen"] = (
+    emp["sesiones"].clip(upper=SESIONES_CONFIABLES) / SESIONES_CONFIABLES
+)
+
+# 7) Índice final de usabilidad (0–1)
+emp["indice_usabilidad"] = emp["indice_base"] * emp["factor_volumen"]
+
 # -----------------------------------------------------------
-# KPIs PRINCIPALES
+# KPIs CABECERA
 # -----------------------------------------------------------
 col1, col2, col3, col4, col5 = st.columns(5)
 
 col1.markdown(
     f"<div class='big-metric'>{emp.shape[0]}</div>"
-    "<div class='metric-label'>Empresas activas</div>",
+    "<div class='metric-label'>Empresas con actividad en el periodo</div>",
     unsafe_allow_html=True,
 )
 col2.markdown(
@@ -321,7 +339,7 @@ col2.markdown(
 )
 col3.markdown(
     f"<div class='big-metric'>{len(acciones_por_sesion)}</div>"
-    "<div class='metric-label'>Sesiones en el periodo</div>",
+    "<div class='metric-label'>Sesiones (según definición seleccionada)</div>",
     unsafe_allow_html=True,
 )
 col4.markdown(
@@ -336,7 +354,7 @@ col5.markdown(
 )
 
 st.markdown(
-    "<div class='small-help'>Todas las métricas ya consideran los filtros de empresa, fechas y definición de sesión.</div>",
+    "<div class='small-help'>Todo aplica solo a la empresa/periodo y definición de sesión que elegiste.</div>",
     unsafe_allow_html=True,
 )
 
@@ -347,7 +365,7 @@ tab1, tab2, tab3 = st.tabs(
     [
         "📈 Uso en el tiempo y profundidad",
         "🎯 Conversión y flujos",
-        "🏢 Top de empresas",
+        "🏢 Ranking de empresas",
     ]
 )
 
@@ -361,16 +379,14 @@ with tab1:
         "Nivel de detalle del tiempo",
         ["Promedio diario", "Promedio semanal", "Promedio mensual"],
         horizontal=True,
-        help="Cambia la escala para ver la tendencia de uso.",
     )
 
-    # Seleccionar granularidad
     s = sesiones_por_dia["Sesiones"]
     if nivel_tiempo == "Promedio diario":
         freq = s.to_frame("Sesiones promedio")
     elif nivel_tiempo == "Promedio semanal":
         freq = s.resample("W").mean().to_frame("Sesiones promedio")
-    else:  # mensual
+    else:
         freq = s.resample("M").mean().to_frame("Sesiones promedio")
 
     freq = freq.reset_index().rename(columns={"index": "Periodo"})
@@ -439,10 +455,8 @@ with tab1:
 
     st.altair_chart(depth_chart, use_container_width=True)
 
-    with st.expander("Ver detalle de sesiones y profundidad"):
-        st.dataframe(
-            depth_df.sort_values("Número de acciones", ascending=False)
-        )
+    with st.expander("Detalle de sesiones y profundidad"):
+        st.dataframe(depth_df.sort_values("Número de acciones", ascending=False))
 
 # -----------------------------------------------------------
 # TAB 2 – CONVERSIÓN Y FLUJOS
@@ -457,7 +471,7 @@ with tab2:
             "Descripción": [
                 "Sesiones donde se vio un producto y se descargó al menos una FDS",
                 "Sesiones donde se vio un producto y se descargó al menos una etiqueta",
-                "Sesiones donde se vio un producto y se descargó FDS o etiqueta (lo que sea)",
+                "Sesiones donde se vio un producto y se descargó FDS o etiqueta",
             ],
         }
     )
@@ -486,9 +500,7 @@ with tab2:
     st.altair_chart(conv_chart, use_container_width=True)
 
     st.markdown(
-        """
-Estas tasas se calculan **solo sobre sesiones donde hubo visualización del detalle de un producto**.
-        """
+        "Estas tasas se calculan **solo sobre sesiones donde hubo visualización del detalle de un producto**."
     )
 
     st.subheader("Flujos más frecuentes (pares de acciones consecutivas)")
@@ -537,7 +549,7 @@ Estas tasas se calculan **solo sobre sesiones donde hubo visualización del deta
 
         st.altair_chart(rutas_chart, use_container_width=True)
 
-        with st.expander("Ver tabla de flujos detallada"):
+        with st.expander("Tabla de flujos detallada"):
             st.dataframe(
                 rutas.rename(
                     columns={
@@ -549,15 +561,22 @@ Estas tasas se calculan **solo sobre sesiones donde hubo visualización del deta
             )
 
 # -----------------------------------------------------------
-# TAB 3 – TOP EMPRESAS
+# TAB 3 – RANKING DE EMPRESAS
 # -----------------------------------------------------------
 with tab3:
-    st.subheader("Ranking de empresas por métrica")
+    st.subheader("Ranking de empresas por usabilidad")
+
+    # Valor fijo definido por criterio técnico
+    SESIONES_MINIMAS = 3
+
+    # Filtrar empresas con suficiente volumen
+    emp_filtrado = emp[emp["sesiones"] >= SESIONES_MINIMAS]
 
     opciones_ranking = {
-        "Índice de usabilidad (compuesto)": "indice",
+        "Índice de usabilidad (0–1)": "indice_usabilidad",
+        "Índice base (sin ajuste por volumen)": "indice_base",
         "Número de sesiones": "sesiones",
-        "Profundidad (acciones promedio por sesión)": "profundidad",
+        "Acciones promedio por sesión": "profundidad",
         "Conversión promedio (FDS + etiquetas)": "conv_prom",
     }
 
@@ -565,85 +584,102 @@ with tab3:
         "Métrica para ordenar el ranking",
         list(opciones_ranking.keys()),
         index=0,
-        help="El índice de usabilidad mezcla sesiones, profundidad y conversión.",
     )
     metrica_col = opciones_ranking[metrica_label]
 
-    top_n = st.slider(
-        "Número de empresas a mostrar", 5, 30, 15
-    )
+    top_n = st.slider("Número de empresas a mostrar", 5, 30, 15)
 
-    emp_rank = (
-        emp.sort_values(metrica_col, ascending=False)
-        .head(top_n)
-        .reset_index()
-    )
-
-    rank_chart = (
-        alt.Chart(emp_rank)
-        .mark_bar()
-        .encode(
-            y=alt.Y("empresa:N", sort="-x", title="Empresa"),
-            x=alt.X(
-                f"{metrica_col}:Q",
-                title=metrica_label,
-            ),
-            tooltip=[
-                alt.Tooltip("empresa:N", title="Empresa"),
-                alt.Tooltip("sesiones:Q", title="Sesiones"),
-                alt.Tooltip(
-                    "profundidad:Q",
-                    title="Acciones prom. por sesión",
-                    format=".2f",
-                ),
-                alt.Tooltip(
-                    "conv_prom:Q",
-                    title="Conv. promedio (FDS+etq)",
-                    format=".1%",
-                ),
-                alt.Tooltip(
-                    "indice:Q",
-                    title="Índice de usabilidad",
-                    format=".2f",
-                ),
-            ],
+    if emp_filtrado.empty:
+        st.info("No hay empresas que cumplan el mínimo de sesiones definido (3 sesiones).")
+    else:
+        emp_rank = (
+            emp_filtrado.sort_values(metrica_col, ascending=False)
+            .head(top_n)
+            .reset_index()
         )
-        .properties(height=500)
-    )
 
-    st.altair_chart(rank_chart, use_container_width=True)
+        rank_chart = (
+            alt.Chart(emp_rank)
+            .mark_bar()
+            .encode(
+                y=alt.Y("empresa:N", sort="-x", title="Empresa"),
+                x=alt.X(f"{metrica_col}:Q", title=metrica_label),
+                tooltip=[
+                    alt.Tooltip("empresa:N", title="Empresa"),
+                    alt.Tooltip("sesiones:Q", title="Sesiones"),
+                    alt.Tooltip("eventos_tot:Q", title="Acciones totales"),
+                    alt.Tooltip(
+                        "profundidad:Q",
+                        title="Acciones promedio por sesión",
+                        format=".2f",
+                    ),
+                    alt.Tooltip(
+                        "conv_prom:Q",
+                        title="Conversión promedio (FDS+etq)",
+                        format=".1%",
+                    ),
+                    alt.Tooltip(
+                        "indice_base:Q",
+                        title="Índice base (0–1)",
+                        format=".2f",
+                    ),
+                    alt.Tooltip(
+                        "indice_usabilidad:Q",
+                        title="Índice de usabilidad (0–1)",
+                        format=".2f",
+                    ),
+                ],
+            )
+            .properties(height=500)
+        )
 
-    st.markdown("### Tabla de ranking")
-    tabla_ranking = emp_rank.rename(
-        columns={
-            "empresa": "Empresa",
-            "sesiones": "Sesiones",
-            "profundidad": "Acciones prom. por sesión",
-            "conv_prom": "Conv. promedio (FDS+etq)",
-            "indice": "Índice de usabilidad",
-        }
-    )[["Empresa", "Sesiones", "Acciones prom. por sesión", "Conv. promedio (FDS+etq)", "Índice de usabilidad"]]
+        st.altair_chart(rank_chart, use_container_width=True)
 
-    st.dataframe(tabla_ranking)
+        st.markdown("### Tabla de ranking")
+        tabla_ranking = emp_rank.rename(
+            columns={
+                "empresa": "Empresa",
+                "sesiones": "Sesiones",
+                "eventos_tot": "Acciones totales",
+                "profundidad": "Acciones prom. por sesión",
+                "conv_prom": "Conv. promedio (FDS+etq)",
+                "indice_base": "Índice base (0–1)",
+                "indice_usabilidad": "Índice de usabilidad (0–1)",
+            }
+        )[
+            [
+                "Empresa",
+                "Sesiones",
+                "Acciones totales",
+                "Acciones prom. por sesión",
+                "Conv. promedio (FDS+etq)",
+                "Índice base (0–1)",
+                "Índice de usabilidad (0–1)",
+            ]
+        ]
 
-    st.markdown("### Ficha rápida por empresa")
+        st.dataframe(tabla_ranking)
 
-    empresa_focus = st.selectbox(
-        "Selecciona una empresa",
-        tabla_ranking["Empresa"].tolist(),
-    )
+        st.markdown("### Ficha rápida por empresa")
 
-    if empresa_focus:
-        fila = emp.loc[empresa_focus]
-        st.markdown(
-            f"""
+        empresa_focus = st.selectbox(
+            "Selecciona una empresa",
+            tabla_ranking["Empresa"].tolist(),
+        )
+
+        if empresa_focus:
+            fila = emp.loc[empresa_focus]
+            st.markdown(
+                f"""
 **{empresa_focus} – Ficha de usabilidad**
 
 - Sesiones en el periodo: **{fila['sesiones']}**
+- Acciones totales: **{fila['eventos_tot']}**
 - Acciones promedio por sesión: **{fila['profundidad']:.2f}**
 - Conversión ver → FDS: **{fila['conv_fds']*100:.1f}%**
 - Conversión ver → Etiquetas: **{fila['conv_etq']*100:.1f}%**
 - Conversión promedio (FDS + Etiquetas): **{fila['conv_prom']*100:.1f}%**
-- Índice de usabilidad (0–1): **{fila['indice']:.2f}**
-            """
-        )
+- Índice base (0–1): **{fila['indice_base']:.2f}**
+- Índice de usabilidad (0–1): **{fila['indice_usabilidad']:.2f}**
+                """
+            )
