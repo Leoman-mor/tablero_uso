@@ -167,6 +167,9 @@ with st.expander("ℹ️ Glosario rápido"):
 - **Índice de usabilidad (0–1):** combina frecuencia (40%), profundidad (30%) y conversión (30%), ajustado por volumen de sesiones.
 - **Tiempo entre acciones:** tiempo promedio (minutos) entre un evento y el siguiente dentro de cada sesión.
 - **Productos trabajados:** conteo de productos distintos (id) creados o actualizados en un periodo. Una actualización se cuenta una sola vez por combinación (id, usuario).
+- **Productos creados:** cantidad de productos distintos cuya fecha de creación está en el año seleccionado y que tienen un usuario de creación definido. Cada producto se cuenta una sola vez.
+- **Productos actualizados:** cantidad de productos distintos con al menos una actualización en el año seleccionado y con usuario de actualización definido. También se cuentan una sola vez por producto.
+- **Actividad por usuario:** número de productos en los que cada usuario aparece como creador o actualizador (deduplicado por producto). Solo se muestran usuarios con actividad y se limita al Top 20.
         """
     )
 
@@ -760,74 +763,478 @@ with tab3:
             )
 
 # -----------------------------------------------------------
-# TAB 4 – TIEMPO ENTRE ACCIONES
+# TAB 4 – TIEMPOS PARA DESCARGAR FDS / ETIQUETAS
 # -----------------------------------------------------------
 with tab4:
-    st.subheader("⏱️ Tiempo promedio entre acciones")
+    st.subheader("⏱️ Tiempos para llegar a descargas de FDS / etiquetas")
 
-    # Recalculamos diferencias de tiempo dentro de cada sesión
-    df_time = df.sort_values(["empresa", "usuario", "session_id", "created_at"]).copy()
-    df_time["diff_min"] = (
-        df_time.groupby(["empresa", "usuario", "session_id"])["created_at"]
-        .diff()
-        .dt.total_seconds()
-        .div(60)
+    st.markdown(
+        "<div class='small-help'>"
+        "Aquí analizamos cuánto tardan las empresas, en promedio, en generar una descarga "
+        "de FDS o de etiquetas desde que sus usuarios entran al módulo de productos. "
+        "Sirve para identificar empresas ágiles y empresas que pueden requerir acompañamiento "
+        "en el uso de Soluquim."
+        "</div>",
+        unsafe_allow_html=True,
     )
 
-    # Solo intervalos válidos
-    df_time_valid = df_time.dropna(subset=["diff_min"])
-    if df_time_valid.empty:
-        st.info("No hay suficientes acciones consecutivas para calcular tiempos entre eventos.")
-    else:
-        tiempo_prom_global = df_time_valid["diff_min"].mean()
+    # -------------------------------------------------------
+    # 1. Construcción de tiempos por sesión
+    #    Punto de inicio: Acceso al módulo de productos
+    # -------------------------------------------------------
+    df_ses = df.sort_values(["session_id", "created_at"]).copy()
 
-        col_a, col_b = st.columns(2)
-        col_a.markdown(
-            f"<div class='big-metric'>{tiempo_prom_global:.1f}</div>"
-            "<div class='metric-label'>Minutos promedio entre acciones (todas las empresas seleccionadas)</div>",
+    # Sesiones base: empresa, usuario, inicio y fin reales
+    ses_base = (
+        df_ses.groupby("session_id")
+        .agg(
+            empresa=("empresa", "first"),
+            usuario=("usuario", "first"),
+            inicio_sesion=("created_at", "min"),
+            fin_sesion=("created_at", "max"),
+        )
+        .reset_index()
+    )
+
+    # Primer acceso al módulo de productos
+    mod_times = (
+        df_ses[df_ses["function_used"] == "Acceso al módulo de productos"]
+        .groupby("session_id")["created_at"]
+        .min()
+        .rename("t_modulo_productos")
+    )
+
+    # Primera descarga de FDS y de etiquetas
+    fds_times = (
+        df_ses[df_ses["es_fds"]]
+        .groupby("session_id")["created_at"]
+        .min()
+        .rename("t_fds")
+    )
+    etq_times = (
+        df_ses[df_ses["es_etq"]]
+        .groupby("session_id")["created_at"]
+        .min()
+        .rename("t_etq")
+    )
+
+    # (Opcional) primera visualización de detalle, como respaldo
+    ver_times = (
+        df_ses[df_ses["es_ver"]]
+        .groupby("session_id")["created_at"]
+        .min()
+        .rename("t_ver")
+    )
+
+    # Unimos todo
+    ses = (
+        ses_base
+        .merge(mod_times, on="session_id", how="left")
+        .merge(ver_times, on="session_id", how="left")
+        .merge(fds_times, on="session_id", how="left")
+        .merge(etq_times, on="session_id", how="left")
+    )
+
+    # Punto de inicio del análisis de tiempos:
+    # 1) Si existe "Acceso al módulo de productos", usamos ese tiempo
+    # 2) Si no, usamos primera visualización de producto (t_ver)
+    # 3) Si tampoco hay, usamos inicio de la sesión
+    ses["t_inicio_trabajo"] = (
+        ses["t_modulo_productos"]
+        .combine_first(ses["t_ver"])
+        .combine_first(ses["inicio_sesion"])
+    )
+
+    # Función auxiliar para obtener diferencias en minutos
+    def diff_minutos(col_fin: str) -> pd.Series:
+        return (
+            (ses[col_fin] - ses["t_inicio_trabajo"])
+            .dt.total_seconds()
+            .div(60)
+        )
+
+    # Tiempos en minutos hasta cada tipo de descarga
+    ses["min_hasta_fds"] = diff_minutos("t_fds")
+    ses["min_hasta_etq"] = diff_minutos("t_etq")
+
+    # Primera descarga de cualquier tipo (FDS o etiqueta)
+    ses["t_desc_cualquiera"] = ses[["t_fds", "t_etq"]].min(axis=1)
+    ses["min_hasta_desc_cualquiera"] = diff_minutos("t_desc_cualquiera")
+
+    total_sesiones = ses["session_id"].nunique()
+    if total_sesiones == 0:
+        st.info("No hay sesiones en el periodo y filtros seleccionados.")
+        st.stop()
+
+    # Sólo consideramos tiempos razonables (0–120 min)
+    MAX_MIN = 120
+
+    mask_fds = (
+        ses["min_hasta_fds"].notna()
+        & (ses["min_hasta_fds"] >= 0)
+        & (ses["min_hasta_fds"] <= MAX_MIN)
+    )
+    mask_etq = (
+        ses["min_hasta_etq"].notna()
+        & (ses["min_hasta_etq"] >= 0)
+        & (ses["min_hasta_etq"] <= MAX_MIN)
+    )
+    mask_any = (
+        ses["min_hasta_desc_cualquiera"].notna()
+        & (ses["min_hasta_desc_cualquiera"] >= 0)
+        & (ses["min_hasta_desc_cualquiera"] <= MAX_MIN)
+    )
+
+    if not mask_fds.any() and not mask_etq.any():
+        st.info(
+            "No se encontraron sesiones que lleguen a descargar FDS o etiquetas "
+            "en el periodo y filtros seleccionados."
+        )
+        st.stop()
+
+    # -------------------------------------------------------
+    # 2. Métricas globales de tiempos
+    # -------------------------------------------------------
+    sesiones_con_fds = ses.loc[mask_fds, "session_id"].nunique()
+    sesiones_con_etq = ses.loc[mask_etq, "session_id"].nunique()
+    sesiones_con_desc_any = ses.loc[mask_any, "session_id"].nunique()
+    empresas_con_desc = ses.loc[mask_any, "empresa"].nunique()
+
+    diffs_fds = ses.loc[mask_fds, "min_hasta_fds"]
+    diffs_etq = ses.loc[mask_etq, "min_hasta_etq"]
+    diffs_any = ses.loc[mask_any, "min_hasta_desc_cualquiera"]
+
+    prom_fds = diffs_fds.mean() if not diffs_fds.empty else np.nan
+    prom_etq = diffs_etq.mean() if not diffs_etq.empty else np.nan
+    prom_any = diffs_any.mean() if not diffs_any.empty else np.nan
+
+    col_a, col_b, col_c, col_d = st.columns(4)
+
+    col_a.markdown(
+        f"<div class='big-metric'>{empresas_con_desc}</div>"
+        "<div class='metric-label'>Empresas con al menos una descarga</div>",
+        unsafe_allow_html=True,
+    )
+    col_b.markdown(
+        f"<div class='big-metric'>{sesiones_con_desc_any}</div>"
+        f"<div class='metric-label'>Sesiones que llegan a descargar algo ({sesiones_con_desc_any/total_sesiones*100:.1f}% del total)</div>",
+        unsafe_allow_html=True,
+    )
+
+    if not np.isnan(prom_fds):
+        col_c.markdown(
+            f"<div class='big-metric'>{prom_fds:.1f}</div>"
+            "<div class='metric-label'>Minutos promedio hasta 1ª FDS</div>",
+            unsafe_allow_html=True,
+        )
+    else:
+        col_c.markdown(
+            "<div class='big-metric'>–</div>"
+            "<div class='metric-label'>Minutos promedio hasta 1ª FDS</div>",
             unsafe_allow_html=True,
         )
 
-        # Promedio por empresa
-        tiempos_emp = (
-            df_time_valid.groupby("empresa")["diff_min"]
-            .mean()
-            .reset_index(name="min_promedio")
-            .sort_values("min_promedio")
+    if not np.isnan(prom_etq):
+        col_d.markdown(
+            f"<div class='big-metric'>{prom_etq:.1f}</div>"
+            "<div class='metric-label'>Minutos promedio hasta 1ª etiqueta</div>",
+            unsafe_allow_html=True,
+        )
+    else:
+        col_d.markdown(
+            "<div class='big-metric'>–</div>"
+            "<div class='metric-label'>Minutos promedio hasta 1ª etiqueta</div>",
+            unsafe_allow_html=True,
         )
 
-        st.markdown("### Tiempo promedio entre acciones por empresa")
+    st.markdown(
+        "<div class='small-help'>"
+        "Los tiempos se miden desde el primer ingreso al módulo de productos en la sesión; "
+        "si no hay registro de ingreso al módulo, se usa la primera visualización de producto "
+        "y, en última instancia, el inicio de la sesión. Solo se consideran tiempos entre 0 y 120 minutos "
+        "para evitar casos atípicos extremos."
+        "</div>",
+        unsafe_allow_html=True,
+    )
 
-        chart_tiempo = (
-            alt.Chart(tiempos_emp)
-            .mark_bar()
-            .encode(
-                y=alt.Y("empresa:N", sort="-x", title="Empresa"),
-                x=alt.X("min_promedio:Q", title="Minutos promedio entre acciones"),
-                tooltip=[
-                    alt.Tooltip("empresa:N", title="Empresa"),
-                    alt.Tooltip("min_promedio:Q", title="Minutos promedio", format=".2f"),
-                ],
-            )
-            .properties(height=500)
+    st.markdown("---")
+    st.subheader("🏢 Ranking de empresas por tiempo promedio")
+
+    # -------------------------------------------------------
+    # 3. Agregación por empresa
+    # -------------------------------------------------------
+    # Sesiones totales por empresa
+    ses_tot_emp = (
+        ses.groupby("empresa")["session_id"]
+        .nunique()
+        .reset_index(name="sesiones_totales")
+    )
+
+    # Métricas FDS por empresa
+    fds_emp = (
+        ses.loc[mask_fds]
+        .groupby("empresa")["min_hasta_fds"]
+        .agg(["mean", "median", "count"])
+        .reset_index()
+        .rename(
+            columns={
+                "mean": "tiempo_prom_fds",
+                "median": "tiempo_mediano_fds",
+                "count": "sesiones_con_fds",
+            }
+        )
+    )
+
+    # Métricas etiquetas por empresa
+    etq_emp = (
+        ses.loc[mask_etq]
+        .groupby("empresa")["min_hasta_etq"]
+        .agg(["mean", "median", "count"])
+        .reset_index()
+        .rename(
+            columns={
+                "mean": "tiempo_prom_etq",
+                "median": "tiempo_mediano_etq",
+                "count": "sesiones_con_etq",
+            }
+        )
+    )
+
+    # Consolidado
+    ranking = (
+        ses_tot_emp
+        .merge(fds_emp, on="empresa", how="left")
+        .merge(etq_emp, on="empresa", how="left")
+    )
+
+    # Empresas con al menos N sesiones con cada tipo de descarga
+    MIN_SES_EMPRESA = 5
+
+    ranking_fds = ranking[
+        ranking["sesiones_con_fds"].fillna(0) >= MIN_SES_EMPRESA
+    ].copy()
+    ranking_etq = ranking[
+        ranking["sesiones_con_etq"].fillna(0) >= MIN_SES_EMPRESA
+    ].copy()
+
+    num_emp_disp = max(ranking_fds.shape[0], ranking_etq.shape[0])
+
+    if num_emp_disp == 0:
+        st.info(
+            "No hay empresas con suficientes sesiones que lleguen a descargar FDS o etiquetas "
+            f"(se requieren al menos {MIN_SES_EMPRESA} sesiones con descarga por empresa)."
+        )
+    else:
+        # Control de orden para ver rápidos o lentos primero
+        orden_opcion = st.radio(
+            "Orden del ranking",
+            ["Más rápidos primero", "Más lentos primero"],
+            horizontal=True,
+            help="Elige si quieres ver primero las empresas más ágiles o las más lentas.",
+        )
+        asc = True if orden_opcion == "Más rápidos primero" else False
+        sort_order = "ascending" if asc else "descending"
+
+        top_n = st.slider(
+            "Número de empresas a mostrar en el ranking",
+            min_value=5,
+            max_value=min(30, num_emp_disp),
+            value=min(15, num_emp_disp),
+            help="Controla cuántas empresas aparecen en las barras.",
         )
 
-        st.altair_chart(chart_tiempo, use_container_width=True)
+        # ---------------------------------------------------
+        # 3.1. Gráfica FDS
+        # ---------------------------------------------------
+        col_fds, col_etq = st.columns(2)
 
-        with st.expander("Distribución general de tiempos (todas las empresas seleccionadas)"):
-            hist_data = df_time_valid["diff_min"]
-            hist_df = pd.DataFrame({"minutos": hist_data})
-            hist_chart = (
-                alt.Chart(hist_df)
-                .mark_bar()
-                .encode(
-                    x=alt.X("minutos:Q", bin=alt.Bin(maxbins=40), title="Minutos entre acciones"),
-                    y=alt.Y("count():Q", title="Cantidad de intervalos"),
-                    tooltip=[alt.Tooltip("count():Q", title="Intervalos")],
+        with col_fds:
+            st.markdown("#### ⬇️ Tiempo promedio hasta la primera FDS")
+
+            if ranking_fds.empty:
+                st.info(
+                    f"No hay empresas con al menos {MIN_SES_EMPRESA} sesiones que descarguen FDS."
                 )
-                .properties(height=300)
-            )
-            st.altair_chart(hist_chart, use_container_width=True)
+            else:
+                data_fds = (
+                    ranking_fds
+                    .sort_values("tiempo_prom_fds", ascending=asc)
+                    .head(top_n)
+                    .reset_index(drop=True)
+                )
+
+                chart_fds = (
+                    alt.Chart(data_fds)
+                    .mark_bar()
+                    .encode(
+                        y=alt.Y(
+                            "empresa:N",
+                            title="Empresa",
+                            sort=alt.SortField(
+                                field="tiempo_prom_fds",
+                                order=sort_order,
+                            ),
+                        ),
+                        x=alt.X(
+                            "tiempo_prom_fds:Q",
+                            title="Minutos promedio hasta 1ª FDS",
+                        ),
+                        tooltip=[
+                            alt.Tooltip("empresa:N", title="Empresa"),
+                            alt.Tooltip(
+                                "sesiones_totales:Q",
+                                title="Sesiones totales",
+                            ),
+                            alt.Tooltip(
+                                "sesiones_con_fds:Q",
+                                title="Sesiones con FDS",
+                            ),
+                            alt.Tooltip(
+                                "tiempo_prom_fds:Q",
+                                title="Promedio (min)",
+                                format=".2f",
+                            ),
+                            alt.Tooltip(
+                                "tiempo_mediano_fds:Q",
+                                title="Mediana (min)",
+                                format=".2f",
+                            ),
+                        ],
+                    )
+                    .properties(height=450)
+                )
+
+                st.altair_chart(chart_fds, use_container_width=True)
+                st.markdown(
+                    "<div class='small-help'>"
+                    "Según el orden seleccionado, verás primero las empresas más ágiles o las más lentas "
+                    "para generar FDS desde el módulo de productos."
+                    "</div>",
+                    unsafe_allow_html=True,
+                )
+
+        # ---------------------------------------------------
+        # 3.2. Gráfica Etiquetas
+        # ---------------------------------------------------
+        with col_etq:
+            st.markdown("#### 🏷️ Tiempo promedio hasta la primera etiqueta")
+
+            if ranking_etq.empty:
+                st.info(
+                    f"No hay empresas con al menos {MIN_SES_EMPRESA} sesiones que descarguen etiquetas."
+                )
+            else:
+                data_etq = (
+                    ranking_etq
+                    .sort_values("tiempo_prom_etq", ascending=asc)
+                    .head(top_n)
+                    .reset_index(drop=True)
+                )
+
+                chart_etq = (
+                    alt.Chart(data_etq)
+                    .mark_bar()
+                    .encode(
+                        y=alt.Y(
+                            "empresa:N",
+                            title="Empresa",
+                            sort=alt.SortField(
+                                field="tiempo_prom_etq",
+                                order=sort_order,
+                            ),
+                        ),
+                        x=alt.X(
+                            "tiempo_prom_etq:Q",
+                            title="Minutos promedio hasta 1ª etiqueta",
+                        ),
+                        tooltip=[
+                            alt.Tooltip("empresa:N", title="Empresa"),
+                            alt.Tooltip(
+                                "sesiones_totales:Q",
+                                title="Sesiones totales",
+                            ),
+                            alt.Tooltip(
+                                "sesiones_con_etq:Q",
+                                title="Sesiones con etiquetas",
+                            ),
+                            alt.Tooltip(
+                                "tiempo_prom_etq:Q",
+                                title="Promedio (min)",
+                                format=".2f",
+                            ),
+                            alt.Tooltip(
+                                "tiempo_mediano_etq:Q",
+                                title="Mediana (min)",
+                                format=".2f",
+                            ),
+                        ],
+                    )
+                    .properties(height=450)
+                )
+
+                st.altair_chart(chart_etq, use_container_width=True)
+                st.markdown(
+                    "<div class='small-help'>"
+                    "Según el orden seleccionado, verás primero las empresas que generan etiquetas más rápido "
+                    "o las que tardan más."
+                    "</div>",
+                    unsafe_allow_html=True,
+                )
+
+    # -------------------------------------------------------
+    # 4. Tabla detallada por empresa (modelo similar a otras pestañas)
+    # -------------------------------------------------------
+    st.markdown("### 📄 Tabla detallada de tiempos por empresa")
+
+    tabla = ranking.rename(
+        columns={
+            "empresa": "Empresa",
+            "sesiones_totales": "Sesiones totales",
+            "sesiones_con_fds": "Sesiones con FDS",
+            "sesiones_con_etq": "Sesiones con etiquetas",
+            "tiempo_prom_fds": "Tiempo prom. hasta 1ª FDS (min)",
+            "tiempo_mediano_fds": "Tiempo mediano hasta 1ª FDS (min)",
+            "tiempo_prom_etq": "Tiempo prom. hasta 1ª etiqueta (min)",
+            "tiempo_mediano_etq": "Tiempo mediano hasta 1ª etiqueta (min)",
+        }
+    )
+
+    cols_tabla = [
+        "Empresa",
+        "Sesiones totales",
+        "Sesiones con FDS",
+        "Sesiones con etiquetas",
+        "Tiempo prom. hasta 1ª FDS (min)",
+        "Tiempo mediano hasta 1ª FDS (min)",
+        "Tiempo prom. hasta 1ª etiqueta (min)",
+        "Tiempo mediano hasta 1ª etiqueta (min)",
+    ]
+    cols_tabla = [c for c in cols_tabla if c in tabla.columns]
+
+    # Usamos la misma lógica de orden (rápidos / lentos) que en las gráficas
+    # Priorizamos ordenar por FDS; si no existe, por etiquetas
+    sort_col_candidates = [
+        "Tiempo prom. hasta 1ª FDS (min)",
+        "Tiempo prom. hasta 1ª etiqueta (min)",
+    ]
+    sort_col = next((c for c in sort_col_candidates if c in tabla.columns), None)
+
+    if sort_col:
+        # asc viene definido arriba dentro del bloque "if num_emp_disp > 0"
+        # Si no se llegó a ese bloque (caso extremo), asumimos asc = True por defecto
+        if "asc" not in locals():
+            asc = True
+
+        tabla_sorted = tabla[cols_tabla].sort_values(
+            sort_col,
+            ascending=asc,
+            na_position="last",
+        )
+    else:
+        tabla_sorted = tabla[cols_tabla]
+
+    st.dataframe(tabla_sorted)
+
 
 # -----------------------------------------------------------
 # TAB 5 – PRODUCTOS (CREACIÓN / ACTUALIZACIÓN)
