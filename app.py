@@ -1762,48 +1762,36 @@ with tab5:
 
         st.altair_chart(chart_users_crea | chart_users_act, use_container_width=True)
 
-        # ---------- DETALLE POR USUARIO (MÉTRICAS) ----------
+        
+        # ---------- DETALLE POR USUARIO (MÉTRICAS, SIN FILTRO) ----------
         st.markdown("### 📄 Detalle por usuario")
 
-        # Todos los usuarios con actividad en el periodo/mode seleccionado
-        usuarios_lista = ["(Todos)"] + sorted(
-            act_full["usuario"].tolist(), key=lambda x: x.upper()
-        )
-
-        usuario_sel = st.selectbox(
-            "Ver métricas de productos trabajados por:",
-            usuarios_lista,
-            key="tab5_usuario_detalle",
-        )
-
-        # Tabla base de métricas
-        tabla_users = act_full.copy().sort_values(
-            ["total_productos", "productos_creados", "productos_actualizados"],
-            ascending=False,
-        )
-
-        tabla_users = tabla_users.rename(
-            columns={
-                "usuario": "Usuario",
-                "productos_creados": "Productos creados",
-                "productos_actualizados": "Productos actualizados",
-                "total_productos": "Total productos trabajados",
-            }
-        )[
-            [
-                "Usuario",
-                "Productos creados",
-                "Productos actualizados",
-                "Total productos trabajados",
+        tabla_users = (
+            act_full.copy()
+            .sort_values(
+                ["total_productos", "productos_creados", "productos_actualizados"],
+                ascending=False,
+            )
+            .rename(
+                columns={
+                    "usuario": "Usuario",
+                    "productos_creados": "Productos creados",
+                    "productos_actualizados": "Productos actualizados",
+                    "total_productos": "Total productos trabajados",
+                }
+            )[
+                [
+                    "Usuario",
+                    "Productos creados",
+                    "Productos actualizados",
+                    "Total productos trabajados",
+                ]
             ]
-        ]
+            .reset_index(drop=True)  # 🔥 sin índice
+        )
 
-        if usuario_sel == "(Todos)":
-            detalle_df = tabla_users
-        else:
-            detalle_df = tabla_users[tabla_users["Usuario"] == usuario_sel]
-
-        st.dataframe(detalle_df.reset_index(drop=True), use_container_width=True)
-
-
+        st.dataframe(
+            tabla_users.set_index("Usuario"),
+            use_container_width=True,
+        )
 
