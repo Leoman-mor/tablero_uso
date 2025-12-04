@@ -1643,7 +1643,14 @@ with tab5:
                     alt.Chart(serie_anual)
                     .mark_bar()
                     .encode(
-                        x=alt.X("anio:O", title="Año de adjunto"),
+                        x=alt.X(
+                            "anio:O",
+                            title="Año de adjunto",
+                            axis=alt.Axis(
+                                labelAngle=-45,      # 🔄 rotamos etiquetas
+                                labelOverlap=False,  # ❌ no permitir solapamiento
+                            ),
+                        ),
                         y=alt.Y(
                             "productos_con_adjuntos:Q",
                             title="Productos con adjuntos (ids únicos)",
@@ -1657,8 +1664,7 @@ with tab5:
                         ],
                     )
                     .properties(
-                        title="Productos con adjuntos por año",
-                        height=320,
+                        height=260,  # un poco más compacto
                     )
                 )
 
@@ -1671,8 +1677,10 @@ with tab5:
 
                 serie_heat["mes_label"] = pd.Categorical(
                     serie_heat["mes_label"],
-                    categories=["Ene", "Feb", "Mar", "Abr", "May", "Jun",
-                                "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"],
+                    categories=[
+                        "Ene", "Feb", "Mar", "Abr", "May", "Jun",
+                        "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"
+                    ],
                     ordered=True,
                 )
 
@@ -1693,8 +1701,7 @@ with tab5:
                         ],
                     )
                     .properties(
-                        title="Mapa de calor de adjuntos por año y mes",
-                        height=320,
+                        height=260,
                     )
                 )
 
@@ -1702,6 +1709,7 @@ with tab5:
                     st.altair_chart(chart_anual, use_container_width=True)
                 else:
                     st.altair_chart(heat_chart, use_container_width=True)
+
 
                 with st.expander("📄 Ver tabla resumida de adjuntos por año y mes"):
                     tabla_adj = (
