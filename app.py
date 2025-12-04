@@ -59,31 +59,36 @@ st.markdown("""
 # -----------------------------------------------------------
 # CARGA DE DATOS
 # -----------------------------------------------------------
+@st.cache_data
 def load_empresas():
     df = pd.read_csv("empresas.csv")
-    df["created_at"] = pd.to_datetime(df["created_at"])
+    df["created_at"] = pd.to_datetime(df["created_at"], errors="coerce")
     df["fecha"] = df["created_at"].dt.date
     df = df.sort_values(["empresa", "usuario", "created_at"])
     return df
 
+@st.cache_data
 def load_productos():
     dfp = pd.read_csv("productos.csv")
 
-    # Fechas principales
-    dfp["created_at"] = pd.to_datetime(dfp["created_at"], errors="coerce")
-    dfp["updated_at"] = pd.to_datetime(dfp["updated_at"], errors="coerce")
+    # Parseo de fechas (incluyendo fecha_adjunto nueva)
+    for col in ["created_at", "updated_at", "fecha_adjunto"]:
+        if col in dfp.columns:
+            dfp[col] = pd.to_datetime(dfp[col], errors="coerce")
 
-    # Nueva: fecha del último adjunto activo
-    if "fecha_adjunto" in dfp.columns:
-        dfp["fecha_adjunto"] = pd.to_datetime(dfp["fecha_adjunto"], errors="coerce")
-
-    # Limpieza de columna basura si existe
     if "Unnamed: 0" in dfp.columns:
         dfp = dfp.drop(columns=["Unnamed: 0"])
-
     return dfp
 
-
+# -----------------------------------------------------------
+# BOTÓN PARA ACTUALIZAR DATOS (LIMPIAR CACHE)
+# -----------------------------------------------------------
+col_refresh, _ = st.columns([1, 5])
+with col_refresh:
+    if st.button("🔄 Actualizar datos"):
+        load_empresas.clear()
+        load_productos.clear()
+        st.experimental_rerun()  # o st.rerun() si usas Streamlit nuevo
 
 df_raw = load_empresas()
 df_prod_raw = load_productos()
@@ -1471,7 +1476,6 @@ with tab4:
                         """
                     )
 
-
 # -----------------------------------------------------------
 # TAB 5 – PRODUCTOS (CREACIÓN / ACTUALIZACIÓN)
 # -----------------------------------------------------------
@@ -1557,6 +1561,7 @@ with tab5:
             if prod_adj.empty:
                 st.info("No hay productos con adjuntos registrados.")
             else:
+
                 # Año y mes del adjunto
                 prod_adj["anio"] = prod_adj["fecha_adjunto"].dt.year.astype(int)
                 prod_adj["mes_num"] = prod_adj["fecha_adjunto"].dt.month
@@ -1573,34 +1578,37 @@ with tab5:
                 prod_adj["antig_dias"] = (hoy - prod_adj["fecha_adjunto"]).dt.days
                 prod_adj["antig_anios"] = prod_adj["antig_dias"] / 365.25
 
+                # --------- MÉTRICAS PARA TARJETAS ----------
                 productos_con_adjuntos_total = prod_adj["id"].nunique()
                 productos_vencidos_5 = prod_adj.loc[
                     prod_adj["antig_anios"] > 5, "id"
                 ].nunique()
-                productos_vigentes = productos_con_adjuntos_total - productos_vencidos_5
 
+                # Fecha promedio de los adjuntos
+                fecha_prom_ts = prod_adj["fecha_adjunto"].mean()
+                if pd.isna(fecha_prom_ts):
+                    fecha_promedio_str = "–"
+                else:
+                    fecha_promedio_str = fecha_prom_ts.date().isoformat()
+
+                # Para el texto de rango (lo dejamos porque sigue siendo útil)
                 fecha_mas_antigua = prod_adj["fecha_adjunto"].min().date()
                 fecha_mas_reciente = prod_adj["fecha_adjunto"].max().date()
 
-                col_a, col_b, col_c, col_d = st.columns(4)
+                col_a, col_b, col_c = st.columns(3)
                 col_a.markdown(
                     f"<div class='metric-card'><div class='big-metric'>{productos_con_adjuntos_total}</div>"
-                    "<div class='metric-label'>Productos con al menos un adjunto</div></div>",
+                    "<div class='metric-label'>Productos con adjunto</div></div>",
                     unsafe_allow_html=True,
                 )
                 col_b.markdown(
-                    f"<div class='metric-card'><div class='big-metric'>{productos_vigentes}</div>"
-                    "<div class='metric-label'>Productos con FDS ≤ 5 años</div></div>",
+                    f"<div class='metric-card'><div class='big-metric'>{fecha_promedio_str}</div>"
+                    "<div class='metric-label'>Fecha promedio de adjuntos</div></div>",
                     unsafe_allow_html=True,
                 )
                 col_c.markdown(
                     f"<div class='metric-card'><div class='big-metric'>{productos_vencidos_5}</div>"
                     "<div class='metric-label'>Productos con FDS &gt; 5 años</div></div>",
-                    unsafe_allow_html=True,
-                )
-                col_d.markdown(
-                    f"<div class='metric-card'><div class='big-metric'>{fecha_mas_antigua}</div>"
-                    f"<div class='metric-label'>Adjunto más antiguo (FDS)</div></div>",
                     unsafe_allow_html=True,
                 )
 
