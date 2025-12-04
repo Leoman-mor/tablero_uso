@@ -1530,70 +1530,91 @@ with tab5:
             unsafe_allow_html=True,
         )
 
-        st.markdown("### 📈 Creación y actualización mensual de productos")
+            # ---------------- Serie mensual (creación + actualización en una sola gráfica) ----------------
+    st.markdown("### 📈 Creación y actualización mensual de productos")
 
-        prod_year_created = prod.loc[
-            mask_created_year & mask_crea_user_valido
-        ].copy()
-        prod_year_updated = prod.loc[
-            mask_updated_year & mask_act_user_valido
-        ].copy()
+    # Solo contamos meses con responsable en ese año
+    prod_year_created = prod.loc[
+        mask_created_year & mask_crea_user_valido
+    ].copy()
+    prod_year_updated = prod.loc[
+        mask_updated_year & mask_act_user_valido
+    ].copy()
 
-        if not prod_year_created.empty:
-            prod_year_created["mes"] = prod_year_created["created_at"].dt.to_period("M").astype(str)
-        if not prod_year_updated.empty:
-            prod_year_updated["mes"] = prod_year_updated["updated_at"].dt.to_period("M").astype(str)
+    if not prod_year_created.empty:
+        prod_year_created["mes"] = prod_year_created["created_at"].dt.to_period("M").astype(str)
+    if not prod_year_updated.empty:
+        prod_year_updated["mes"] = prod_year_updated["updated_at"].dt.to_period("M").astype(str)
 
-        serie_creados = (
-            prod_year_created.groupby("mes")["id"].nunique().reset_index(name="creados")
-            if not prod_year_created.empty
-            else pd.DataFrame(columns=["mes", "creados"])
+    serie_creados = (
+        prod_year_created.groupby("mes")["id"].nunique().reset_index(name="creados")
+        if not prod_year_created.empty
+        else pd.DataFrame(columns=["mes", "creados"])
+    )
+    serie_actualizados = (
+        prod_year_updated.groupby("mes")["id"].nunique().reset_index(name="actualizados")
+        if not prod_year_updated.empty
+        else pd.DataFrame(columns=["mes", "actualizados"])
+    )
+
+    serie = pd.merge(serie_creados, serie_actualizados, on="mes", how="outer").fillna(0)
+
+    if not serie.empty:
+        # Ordenamos por mes (AAAA-MM)
+        serie = serie.sort_values("mes")
+
+        # Extraemos número de mes y etiqueta corta en español
+        serie["mes_num"] = pd.to_datetime(serie["mes"] + "-01").dt.month
+        mapa_meses = {
+            1: "Ene", 2: "Feb", 3: "Mar", 4: "Abr",
+            5: "May", 6: "Jun", 7: "Jul", 8: "Ago",
+            9: "Sep", 10: "Oct", 11: "Nov", 12: "Dic",
+        }
+        serie["mes_label"] = serie["mes_num"].map(mapa_meses)
+
+        # Formato largo para una sola gráfica con dos líneas
+        serie_long = serie.melt(
+            id_vars=["mes", "mes_num", "mes_label"],
+            value_vars=["creados", "actualizados"],
+            var_name="tipo",
+            value_name="productos"
         )
-        serie_actualizados = (
-            prod_year_updated.groupby("mes")["id"].nunique().reset_index(name="actualizados")
-            if not prod_year_updated.empty
-            else pd.DataFrame(columns=["mes", "actualizados"])
+
+        serie_long["tipo"] = serie_long["tipo"].replace(
+            {
+                "creados": "Creados",
+                "actualizados": "Actualizados",
+            }
         )
 
-        serie = pd.merge(serie_creados, serie_actualizados, on="mes", how="outer").fillna(0)
-
-        if not serie.empty:
-            serie = serie.sort_values("mes")
-            serie["mes_dt"] = pd.to_datetime(serie["mes"] + "-01")
-
-            serie_long = serie.melt(
-                id_vars=["mes", "mes_dt"],
-                value_vars=["creados", "actualizados"],
-                var_name="tipo",
-                value_name="productos"
+        chart_line = (
+            alt.Chart(serie_long)
+            .mark_line(point=True)
+            .encode(
+                x=alt.X(
+                    "mes_label:N",
+                    title="Mes",
+                    sort=["Ene", "Feb", "Mar", "Abr", "May", "Jun",
+                          "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"],
+                ),
+                y=alt.Y("productos:Q", title="Productos trabajados"),
+                color=alt.Color("tipo:N", title="Tipo"),
+                tooltip=[
+                    alt.Tooltip("mes_label:N", title="Mes"),
+                    alt.Tooltip("tipo:N", title="Tipo"),
+                    alt.Tooltip("productos:Q", title="Productos"),
+                ],
             )
-
-            serie_long["tipo"] = serie_long["tipo"].replace(
-                {
-                    "creados": "Creados",
-                    "actualizados": "Actualizados",
-                }
+            .properties(
+                title=f"Productos creados y actualizados por mes en {year}",
+                height=320,
             )
+        )
 
-            chart_line = (
-                alt.Chart(serie_long)
-                .mark_line(point=True)
-                .encode(
-                    x=alt.X("mes_dt:T", title="Mes"),
-                    y=alt.Y("productos:Q", title="Productos trabajados"),
-                    color=alt.Color("tipo:N", title="Tipo"),
-                    tooltip=[
-                        alt.Tooltip("mes:N", title="Mes"),
-                        alt.Tooltip("tipo:N", title="Tipo"),
-                        alt.Tooltip("productos:Q", title="Productos"),
-                    ],
-                )
-                .properties(title=f"Productos creados y actualizados por mes en {year}", height=320)
-            )
+        st.altair_chart(chart_line, use_container_width=True)
+    else:
+        st.info(f"No hay productos trabajados (con responsable) en {year}.")
 
-            st.altair_chart(chart_line, use_container_width=True)
-        else:
-            st.info(f"No hay productos trabajados (con responsable) en {year}.")
 
             # ---------------- Actividad por usuario (DINÁMICA) ----------------
     st.markdown("### 👥 Actividad por usuario (productos trabajados)")
