@@ -1782,4 +1782,7 @@ with tab5:
         else:
             detalle_df = tabla_users[tabla_users["Usuario"] == usuario_sel]
 
-        st.dataframe(detalle_df, use_container_width=True)
+        st.dataframe(detalle_df.reset_index(drop=True), use_container_width=True)
+
+
+
