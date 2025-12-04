@@ -1595,125 +1595,191 @@ with tab5:
         else:
             st.info(f"No hay productos trabajados (con responsable) en {year}.")
 
-        st.markdown("### 👥 Actividad por usuario (productos trabajados)")
+            # ---------------- Actividad por usuario (DINÁMICA) ----------------
+    st.markdown("### 👥 Actividad por usuario (productos trabajados)")
 
-        modo_usuarios = st.radio(
-            "Periodo para el análisis por usuario",
-            ["Solo año seleccionado", "Histórico completo"],
-            horizontal=True,
-            key="tab5_modo_usuarios",
-        )
+    modo_usuarios = st.radio(
+        "Periodo para el análisis por usuario",
+        ["Solo año seleccionado", "Histórico completo"],
+        horizontal=True,
+        help="Elige si quieres ver la actividad solo para el año elegido o para toda la historia.",
+        key="tab5_modo_usuarios",
+    )
 
+    if modo_usuarios == "Solo año seleccionado":
+        # Solo productos del año filtrado
+        mask_crea_base = mask_created_year & mask_crea_user_valido
+        mask_act_base = mask_updated_year & mask_act_user_valido
+        sufijo_titulo = f" en {year}"
+    else:
+        # Todo el histórico (sin filtrar por año)
+        mask_crea_base = mask_crea_user_valido
+        mask_act_base = mask_act_user_valido
+        sufijo_titulo = " (histórico completo)"
+
+    # CREADOS: deduplicamos por (id, usuario_crea_clean), sin usuarios vacíos
+    crea_user_df = (
+        prod.loc[
+            mask_crea_base,
+            ["id", "usuario_crea_clean"],
+        ]
+        .drop_duplicates(subset=["id", "usuario_crea_clean"])
+        .rename(columns={"usuario_crea_clean": "usuario"})
+    )
+    crea_user = (
+        crea_user_df.groupby("usuario")["id"]
+        .nunique()
+        .reset_index(name="productos_creados")
+    )
+
+    # ACTUALIZADOS: deduplicamos por (id, usuario_actualiza_clean), sin usuarios vacíos
+    act_user_df = (
+        prod.loc[
+            mask_act_base,
+            ["id", "usuario_actualiza_clean"],
+        ]
+        .drop_duplicates(subset=["id", "usuario_actualiza_clean"])
+        .rename(columns={"usuario_actualiza_clean": "usuario"})
+    )
+    act_user = (
+        act_user_df.groupby("usuario")["id"]
+        .nunique()
+        .reset_index(name="productos_actualizados")
+    )
+
+    # Merge por usuario (base completa de métricas)
+    act_full = pd.merge(
+        crea_user,
+        act_user,
+        on="usuario",
+        how="outer",
+    ).fillna(0)
+
+    # Quitamos usuarios sin actividad (0 creados y 0 actualizados)
+    act_full = act_full[
+        (act_full["productos_creados"] > 0) | (act_full["productos_actualizados"] > 0)
+    ].copy()
+
+    # Métrica total
+    act_full["total_productos"] = (
+        act_full["productos_creados"] + act_full["productos_actualizados"]
+    )
+
+    if act_full.empty:
         if modo_usuarios == "Solo año seleccionado":
-            mask_crea_base = mask_created_year & mask_crea_user_valido
-            mask_act_base = mask_updated_year & mask_act_user_valido
-            sufijo_titulo = f" en {year}"
+            st.info(f"No hay actividad de usuarios sobre productos en {year}.")
         else:
-            mask_crea_base = mask_crea_user_valido
-            mask_act_base = mask_act_user_valido
-            sufijo_titulo = " (histórico completo)"
+            st.info("No hay actividad de usuarios sobre productos.")
+    else:
+        # ---------- TOP 20 PARA LAS GRÁFICAS ----------
+        act_top = act_full.sort_values(
+            ["total_productos", "productos_creados", "productos_actualizados"],
+            ascending=False,
+        ).head(20)
 
-        crea_user_df = (
-            prod.loc[
-                mask_crea_base,
-                ["id", "usuario_crea_clean"],
+        chart_users_crea = (
+            alt.Chart(act_top)
+            .mark_bar()
+            .encode(
+                x=alt.X(
+                    "productos_creados:Q",
+                    title=f"Productos creados{sufijo_titulo}",
+                ),
+                y=alt.Y("usuario:N", sort="-x", title="Usuario"),
+                tooltip=[
+                    alt.Tooltip("usuario:N", title="Usuario"),
+                    alt.Tooltip(
+                        "productos_creados:Q",
+                        title="Creados (ids únicos)",
+                    ),
+                    alt.Tooltip(
+                        "productos_actualizados:Q",
+                        title="Actualizados (ids únicos)",
+                    ),
+                    alt.Tooltip(
+                        "total_productos:Q",
+                        title="Total productos trabajados",
+                    ),
+                ],
+            )
+            .properties(
+                title=f"Top 20 – Productos creados por usuario{sufijo_titulo}",
+                height=400,
+            )
+        )
+
+        chart_users_act = (
+            alt.Chart(act_top)
+            .mark_bar()
+            .encode(
+                x=alt.X(
+                    "productos_actualizados:Q",
+                    title=f"Productos actualizados{sufijo_titulo}",
+                ),
+                y=alt.Y("usuario:N", sort="-x", title="Usuario"),
+                tooltip=[
+                    alt.Tooltip("usuario:N", title="Usuario"),
+                    alt.Tooltip(
+                        "productos_creados:Q",
+                        title="Creados (ids únicos)",
+                    ),
+                    alt.Tooltip(
+                        "productos_actualizados:Q",
+                        title="Actualizados (ids únicos)",
+                    ),
+                    alt.Tooltip(
+                        "total_productos:Q",
+                        title="Total productos trabajados",
+                    ),
+                ],
+            )
+            .properties(
+                title=f"Top 20 – Productos actualizados por usuario{sufijo_titulo}",
+                height=400,
+            )
+        )
+
+        st.altair_chart(chart_users_crea | chart_users_act, use_container_width=True)
+
+        # ---------- DETALLE POR USUARIO (MÉTRICAS) ----------
+        st.markdown("### 📄 Detalle por usuario")
+
+        # Todos los usuarios con actividad en el periodo/mode seleccionado
+        usuarios_lista = ["(Todos)"] + sorted(
+            act_full["usuario"].tolist(), key=lambda x: x.upper()
+        )
+
+        usuario_sel = st.selectbox(
+            "Ver métricas de productos trabajados por:",
+            usuarios_lista,
+            key="tab5_usuario_detalle",
+        )
+
+        # Tabla base de métricas
+        tabla_users = act_full.copy().sort_values(
+            ["total_productos", "productos_creados", "productos_actualizados"],
+            ascending=False,
+        )
+
+        tabla_users = tabla_users.rename(
+            columns={
+                "usuario": "Usuario",
+                "productos_creados": "Productos creados",
+                "productos_actualizados": "Productos actualizados",
+                "total_productos": "Total productos trabajados",
+            }
+        )[
+            [
+                "Usuario",
+                "Productos creados",
+                "Productos actualizados",
+                "Total productos trabajados",
             ]
-            .drop_duplicates(subset=["id", "usuario_crea_clean"])
-            .rename(columns={"usuario_crea_clean": "usuario"})
-        )
-        crea_user = (
-            crea_user_df.groupby("usuario")["id"]
-            .nunique()
-            .reset_index(name="productos_creados")
-        )
-
-        act_user_df = (
-            prod.loc[
-                mask_act_base,
-                ["id", "usuario_actualiza_clean"],
-            ]
-            .drop_duplicates(subset=["id", "usuario_actualiza_clean"])
-            .rename(columns={"usuario_actualiza_clean": "usuario"})
-        )
-        act_user = (
-            act_user_df.groupby("usuario")["id"]
-            .nunique()
-            .reset_index(name="productos_actualizados")
-        )
-
-        act_merge = pd.merge(
-            crea_user,
-            act_user,
-            on="usuario",
-            how="outer",
-        ).fillna(0)
-
-        act_merge = act_merge[
-            (act_merge["productos_creados"] > 0) | (act_merge["productos_actualizados"] > 0)
         ]
 
-        act_merge = act_merge.sort_values(
-            ["productos_creados", "productos_actualizados"], ascending=False
-        )
-
-        # Top 20 fijo (sin slider para evitar problemas de rango)
-        act_merge_top = act_merge.head(20)
-
-        if act_merge_top.empty:
-            if modo_usuarios == "Solo año seleccionado":
-                st.info(f"No hay actividad de usuarios sobre productos en {year}.")
-            else:
-                st.info("No hay actividad de usuarios sobre productos.")
+        if usuario_sel == "(Todos)":
+            detalle_df = tabla_users
         else:
-            chart_users_crea = (
-                alt.Chart(act_merge_top)
-                .mark_bar()
-                .encode(
-                    x=alt.X("productos_creados:Q", title=f"Productos creados{sufijo_titulo}"),
-                    y=alt.Y("usuario:N", sort="-x", title="Usuario"),
-                    tooltip=[
-                        alt.Tooltip("usuario:N", title="Usuario"),
-                        alt.Tooltip("productos_creados:Q", title="Creados (ids únicos)"),
-                        alt.Tooltip("productos_actualizados:Q", title="Actualizados (ids únicos)"),
-                    ],
-                )
-                .properties(title=f"Top 20 – Productos creados por usuario{sufijo_titulo}", height=400)
-            )
+            detalle_df = tabla_users[tabla_users["Usuario"] == usuario_sel]
 
-            chart_users_act = (
-                alt.Chart(act_merge_top)
-                .mark_bar()
-                .encode(
-                    x=alt.X("productos_actualizados:Q", title=f"Productos actualizados{sufijo_titulo}"),
-                    y=alt.Y("usuario:N", sort="-x", title="Usuario"),
-                    tooltip=[
-                        alt.Tooltip("usuario:N", title="Usuario"),
-                        alt.Tooltip("productos_creados:Q", title="Creados (ids únicos)"),
-                        alt.Tooltip("productos_actualizados:Q", title="Actualizados (ids únicos)"),
-                    ],
-                )
-                .properties(title=f"Top 20 – Productos actualizados por usuario{sufijo_titulo}", height=400)
-            )
-
-            st.altair_chart(chart_users_crea | chart_users_act, use_container_width=True)
-
-            st.markdown("### 📄 Detalle por usuario (Top 20)")
-
-            usuarios_lista = ["(Todos)"] + act_merge_top["usuario"].tolist()
-            usuario_sel = st.selectbox("Ver detalle de productos trabajados por:", usuarios_lista)
-
-            if usuario_sel == "(Todos)":
-                detalle_df = prod[
-                    (mask_crea_base | mask_act_base)
-                    & (
-                        prod["usuario_crea_clean"].isin(act_merge_top["usuario"])
-                        | prod["usuario_actualiza_clean"].isin(act_merge_top["usuario"])
-                    )
-                ][["id", "created_at", "updated_at", "usuario_crea", "usuario_actualiza"]]
-            else:
-                detalle_df = prod[
-                    ((mask_crea_base & (prod["usuario_crea_clean"] == usuario_sel)) |
-                     (mask_act_base & (prod["usuario_actualiza_clean"] == usuario_sel)))
-                ][["id", "created_at", "updated_at", "usuario_crea", "usuario_actualiza"]]
-
-            st.dataframe(detalle_df.sort_values(["id", "created_at"]))
+        st.dataframe(detalle_df, use_container_width=True)
