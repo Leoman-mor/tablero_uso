@@ -59,7 +59,6 @@ st.markdown("""
 # -----------------------------------------------------------
 # CARGA DE DATOS
 # -----------------------------------------------------------
-@st.cache_data
 def load_empresas():
     df = pd.read_csv("empresas.csv")
     df["created_at"] = pd.to_datetime(df["created_at"])
@@ -67,14 +66,23 @@ def load_empresas():
     df = df.sort_values(["empresa", "usuario", "created_at"])
     return df
 
-@st.cache_data
 def load_productos():
     dfp = pd.read_csv("productos.csv")
+
+    # Fechas principales
     dfp["created_at"] = pd.to_datetime(dfp["created_at"], errors="coerce")
     dfp["updated_at"] = pd.to_datetime(dfp["updated_at"], errors="coerce")
+
+    # Nueva: fecha del último adjunto activo
+    if "fecha_adjunto" in dfp.columns:
+        dfp["fecha_adjunto"] = pd.to_datetime(dfp["fecha_adjunto"], errors="coerce")
+
+    # Limpieza de columna basura si existe
     if "Unnamed: 0" in dfp.columns:
         dfp = dfp.drop(columns=["Unnamed: 0"])
+
     return dfp
+
 
 
 df_raw = load_empresas()
@@ -1464,8 +1472,6 @@ with tab4:
                     )
 
 
-
-
 # -----------------------------------------------------------
 # TAB 5 – PRODUCTOS (CREACIÓN / ACTUALIZACIÓN)
 # -----------------------------------------------------------
@@ -1474,9 +1480,17 @@ with tab5:
 
     prod = df_prod_raw.copy()
 
+    # Aseguramos tipos de fecha por si viene algo raro del CSV
+    prod["created_at"] = pd.to_datetime(prod["created_at"], errors="coerce")
+    prod["updated_at"] = pd.to_datetime(prod["updated_at"], errors="coerce")
+    if "fecha_adjunto" in prod.columns:
+        prod["fecha_adjunto"] = pd.to_datetime(prod["fecha_adjunto"], errors="coerce")
+
+    # Limpieza de usuarios
     prod["usuario_crea_clean"] = prod["usuario_crea"].fillna("").astype(str).str.strip()
     prod["usuario_actualiza_clean"] = prod["usuario_actualiza"].fillna("").astype(str).str.strip()
 
+    # Años disponibles (creación / actualización)
     years_created = prod["created_at"].dt.year.dropna().astype(int)
     years_updated = prod["updated_at"].dt.year.dropna().astype(int)
     years_all = sorted(set(years_created.tolist()) | set(years_updated.tolist()))
@@ -1484,6 +1498,7 @@ with tab5:
     if not years_all:
         st.info("No hay información de fechas de creación/actualización de productos.")
     else:
+        # ---------------- Selección de año y métricas principales ----------------
         default_year = 2025 if 2025 in years_all else max(years_all)
         year = st.selectbox(
             "Año a analizar",
@@ -1530,268 +1545,414 @@ with tab5:
             unsafe_allow_html=True,
         )
 
-            # ---------------- Serie mensual (creación + actualización en una sola gráfica) ----------------
-    st.markdown("### 📈 Creación y actualización mensual de productos")
+        # ---------------- Análisis de adjuntos (FDS) ----------------
+        st.markdown("### 📎 Análisis de adjuntos (FDS)")
 
-    # Solo contamos meses con responsable en ese año
-    prod_year_created = prod.loc[
-        mask_created_year & mask_crea_user_valido
-    ].copy()
-    prod_year_updated = prod.loc[
-        mask_updated_year & mask_act_user_valido
-    ].copy()
-
-    if not prod_year_created.empty:
-        prod_year_created["mes"] = prod_year_created["created_at"].dt.to_period("M").astype(str)
-    if not prod_year_updated.empty:
-        prod_year_updated["mes"] = prod_year_updated["updated_at"].dt.to_period("M").astype(str)
-
-    serie_creados = (
-        prod_year_created.groupby("mes")["id"].nunique().reset_index(name="creados")
-        if not prod_year_created.empty
-        else pd.DataFrame(columns=["mes", "creados"])
-    )
-    serie_actualizados = (
-        prod_year_updated.groupby("mes")["id"].nunique().reset_index(name="actualizados")
-        if not prod_year_updated.empty
-        else pd.DataFrame(columns=["mes", "actualizados"])
-    )
-
-    serie = pd.merge(serie_creados, serie_actualizados, on="mes", how="outer").fillna(0)
-
-    if not serie.empty:
-        # Ordenamos por mes (AAAA-MM)
-        serie = serie.sort_values("mes")
-
-        # Extraemos número de mes y etiqueta corta en español
-        serie["mes_num"] = pd.to_datetime(serie["mes"] + "-01").dt.month
-        mapa_meses = {
-            1: "Ene", 2: "Feb", 3: "Mar", 4: "Abr",
-            5: "May", 6: "Jun", 7: "Jul", 8: "Ago",
-            9: "Sep", 10: "Oct", 11: "Nov", 12: "Dic",
-        }
-        serie["mes_label"] = serie["mes_num"].map(mapa_meses)
-
-        # Formato largo para una sola gráfica con dos líneas
-        serie_long = serie.melt(
-            id_vars=["mes", "mes_num", "mes_label"],
-            value_vars=["creados", "actualizados"],
-            var_name="tipo",
-            value_name="productos"
-        )
-
-        serie_long["tipo"] = serie_long["tipo"].replace(
-            {
-                "creados": "Creados",
-                "actualizados": "Actualizados",
-            }
-        )
-
-        chart_line = (
-            alt.Chart(serie_long)
-            .mark_line(point=True)
-            .encode(
-                x=alt.X(
-                    "mes_label:N",
-                    title="Mes",
-                    sort=["Ene", "Feb", "Mar", "Abr", "May", "Jun",
-                          "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"],
-                ),
-                y=alt.Y("productos:Q", title="Productos trabajados"),
-                color=alt.Color("tipo:N", title="Tipo"),
-                tooltip=[
-                    alt.Tooltip("mes_label:N", title="Mes"),
-                    alt.Tooltip("tipo:N", title="Tipo"),
-                    alt.Tooltip("productos:Q", title="Productos"),
-                ],
-            )
-            .properties(
-                title=f"Productos creados y actualizados por mes en {year}",
-                height=320,
-            )
-        )
-
-        st.altair_chart(chart_line, use_container_width=True)
-    else:
-        st.info(f"No hay productos trabajados (con responsable) en {year}.")
-
-
-            # ---------------- Actividad por usuario (DINÁMICA) ----------------
-    st.markdown("### 👥 Actividad por usuario (productos trabajados)")
-
-    modo_usuarios = st.radio(
-        "Periodo para el análisis por usuario",
-        ["Solo año seleccionado", "Histórico completo"],
-        horizontal=True,
-        help="Elige si quieres ver la actividad solo para el año elegido o para toda la historia.",
-        key="tab5_modo_usuarios",
-    )
-
-    if modo_usuarios == "Solo año seleccionado":
-        # Solo productos del año filtrado
-        mask_crea_base = mask_created_year & mask_crea_user_valido
-        mask_act_base = mask_updated_year & mask_act_user_valido
-        sufijo_titulo = f" en {year}"
-    else:
-        # Todo el histórico (sin filtrar por año)
-        mask_crea_base = mask_crea_user_valido
-        mask_act_base = mask_act_user_valido
-        sufijo_titulo = " (histórico completo)"
-
-    # CREADOS: deduplicamos por (id, usuario_crea_clean), sin usuarios vacíos
-    crea_user_df = (
-        prod.loc[
-            mask_crea_base,
-            ["id", "usuario_crea_clean"],
-        ]
-        .drop_duplicates(subset=["id", "usuario_crea_clean"])
-        .rename(columns={"usuario_crea_clean": "usuario"})
-    )
-    crea_user = (
-        crea_user_df.groupby("usuario")["id"]
-        .nunique()
-        .reset_index(name="productos_creados")
-    )
-
-    # ACTUALIZADOS: deduplicamos por (id, usuario_actualiza_clean), sin usuarios vacíos
-    act_user_df = (
-        prod.loc[
-            mask_act_base,
-            ["id", "usuario_actualiza_clean"],
-        ]
-        .drop_duplicates(subset=["id", "usuario_actualiza_clean"])
-        .rename(columns={"usuario_actualiza_clean": "usuario"})
-    )
-    act_user = (
-        act_user_df.groupby("usuario")["id"]
-        .nunique()
-        .reset_index(name="productos_actualizados")
-    )
-
-    # Merge por usuario (base completa de métricas)
-    act_full = pd.merge(
-        crea_user,
-        act_user,
-        on="usuario",
-        how="outer",
-    ).fillna(0)
-
-    # Quitamos usuarios sin actividad (0 creados y 0 actualizados)
-    act_full = act_full[
-        (act_full["productos_creados"] > 0) | (act_full["productos_actualizados"] > 0)
-    ].copy()
-
-    # Métrica total
-    act_full["total_productos"] = (
-        act_full["productos_creados"] + act_full["productos_actualizados"]
-    )
-
-    if act_full.empty:
-        if modo_usuarios == "Solo año seleccionado":
-            st.info(f"No hay actividad de usuarios sobre productos en {year}.")
+        if "fecha_adjunto" not in prod.columns:
+            st.info("Este dataset aún no trae la columna 'fecha_adjunto'.")
         else:
-            st.info("No hay actividad de usuarios sobre productos.")
-    else:
-        # ---------- TOP 20 PARA LAS GRÁFICAS ----------
-        act_top = act_full.sort_values(
-            ["total_productos", "productos_creados", "productos_actualizados"],
-            ascending=False,
-        ).head(20)
+            # Nos quedamos solo con filas con fecha_adjunto válida
+            prod_adj = prod[prod["fecha_adjunto"].notna()].copy()
 
-        chart_users_crea = (
-            alt.Chart(act_top)
-            .mark_bar()
-            .encode(
-                x=alt.X(
-                    "productos_creados:Q",
-                    title=f"Productos creados{sufijo_titulo}",
-                ),
-                y=alt.Y("usuario:N", sort="-x", title="Usuario"),
-                tooltip=[
-                    alt.Tooltip("usuario:N", title="Usuario"),
-                    alt.Tooltip(
-                        "productos_creados:Q",
-                        title="Creados (ids únicos)",
-                    ),
-                    alt.Tooltip(
-                        "productos_actualizados:Q",
-                        title="Actualizados (ids únicos)",
-                    ),
-                    alt.Tooltip(
-                        "total_productos:Q",
-                        title="Total productos trabajados",
-                    ),
-                ],
-            )
-            .properties(
-                title=f"Top 20 – Productos creados por usuario{sufijo_titulo}",
-                height=400,
-            )
+            if prod_adj.empty:
+                st.info("No hay productos con adjuntos registrados.")
+            else:
+                # Año y mes del adjunto
+                prod_adj["anio"] = prod_adj["fecha_adjunto"].dt.year.astype(int)
+                prod_adj["mes_num"] = prod_adj["fecha_adjunto"].dt.month
+
+                mapa_meses = {
+                    1: "Ene", 2: "Feb", 3: "Mar", 4: "Abr",
+                    5: "May", 6: "Jun", 7: "Jul", 8: "Ago",
+                    9: "Sep", 10: "Oct", 11: "Nov", 12: "Dic",
+                }
+                prod_adj["mes_label"] = prod_adj["mes_num"].map(mapa_meses)
+
+                # Antigüedad de las FDS (regla de 5 años)
+                hoy = pd.Timestamp.today().normalize()
+                prod_adj["antig_dias"] = (hoy - prod_adj["fecha_adjunto"]).dt.days
+                prod_adj["antig_anios"] = prod_adj["antig_dias"] / 365.25
+
+                productos_con_adjuntos_total = prod_adj["id"].nunique()
+                productos_vencidos_5 = prod_adj.loc[
+                    prod_adj["antig_anios"] > 5, "id"
+                ].nunique()
+                productos_vigentes = productos_con_adjuntos_total - productos_vencidos_5
+
+                fecha_mas_antigua = prod_adj["fecha_adjunto"].min().date()
+                fecha_mas_reciente = prod_adj["fecha_adjunto"].max().date()
+
+                col_a, col_b, col_c, col_d = st.columns(4)
+                col_a.markdown(
+                    f"<div class='metric-card'><div class='big-metric'>{productos_con_adjuntos_total}</div>"
+                    "<div class='metric-label'>Productos con al menos un adjunto</div></div>",
+                    unsafe_allow_html=True,
+                )
+                col_b.markdown(
+                    f"<div class='metric-card'><div class='big-metric'>{productos_vigentes}</div>"
+                    "<div class='metric-label'>Productos con FDS ≤ 5 años</div></div>",
+                    unsafe_allow_html=True,
+                )
+                col_c.markdown(
+                    f"<div class='metric-card'><div class='big-metric'>{productos_vencidos_5}</div>"
+                    "<div class='metric-label'>Productos con FDS &gt; 5 años</div></div>",
+                    unsafe_allow_html=True,
+                )
+                col_d.markdown(
+                    f"<div class='metric-card'><div class='big-metric'>{fecha_mas_antigua}</div>"
+                    f"<div class='metric-label'>Adjunto más antiguo (FDS)</div></div>",
+                    unsafe_allow_html=True,
+                )
+
+                st.markdown(
+                    f"<div class='small-help'>Rango de fechas de adjuntos registrados: "
+                    f"de <b>{fecha_mas_antigua}</b> a <b>{fecha_mas_reciente}</b>. "
+                    "La antigüedad se calcula frente a la fecha actual, usando un umbral de 5 años.</div>",
+                    unsafe_allow_html=True,
+                )
+
+                st.markdown("---")
+                st.markdown("#### 📅 Vista temporal de adjuntos")
+
+                vista_adj = st.radio(
+                    "Tipo de análisis",
+                    ["Por año", "Por año y mes (heatmap)"],
+                    horizontal=True,
+                    key="vista_adjuntos",
+                )
+
+                # ---- Serie anual: cuántos productos tienen adjunto por año ----
+                serie_anual = (
+                    prod_adj.groupby("anio")["id"]
+                    .nunique()
+                    .reset_index(name="productos_con_adjuntos")
+                    .sort_values("anio")
+                )
+
+                chart_anual = (
+                    alt.Chart(serie_anual)
+                    .mark_bar()
+                    .encode(
+                        x=alt.X("anio:O", title="Año de adjunto"),
+                        y=alt.Y(
+                            "productos_con_adjuntos:Q",
+                            title="Productos con adjuntos (ids únicos)",
+                        ),
+                        tooltip=[
+                            alt.Tooltip("anio:O", title="Año"),
+                            alt.Tooltip(
+                                "productos_con_adjuntos:Q",
+                                title="Productos con adjuntos",
+                            ),
+                        ],
+                    )
+                    .properties(
+                        title="Productos con adjuntos por año",
+                        height=320,
+                    )
+                )
+
+                # ---- Heatmap año × mes ----
+                serie_heat = (
+                    prod_adj.groupby(["anio", "mes_label"])["id"]
+                    .nunique()
+                    .reset_index(name="productos")
+                )
+
+                serie_heat["mes_label"] = pd.Categorical(
+                    serie_heat["mes_label"],
+                    categories=["Ene", "Feb", "Mar", "Abr", "May", "Jun",
+                                "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"],
+                    ordered=True,
+                )
+
+                heat_chart = (
+                    alt.Chart(serie_heat)
+                    .mark_rect()
+                    .encode(
+                        x=alt.X("mes_label:N", title="Mes"),
+                        y=alt.Y("anio:O", title="Año"),
+                        color=alt.Color(
+                            "productos:Q",
+                            title="Productos con adjuntos",
+                        ),
+                        tooltip=[
+                            alt.Tooltip("anio:O", title="Año"),
+                            alt.Tooltip("mes_label:N", title="Mes"),
+                            alt.Tooltip("productos:Q", title="Productos con adjuntos"),
+                        ],
+                    )
+                    .properties(
+                        title="Mapa de calor de adjuntos por año y mes",
+                        height=320,
+                    )
+                )
+
+                if vista_adj == "Por año":
+                    st.altair_chart(chart_anual, use_container_width=True)
+                else:
+                    st.altair_chart(heat_chart, use_container_width=True)
+
+                with st.expander("📄 Ver tabla resumida de adjuntos por año y mes"):
+                    tabla_adj = (
+                        serie_heat.sort_values(["anio", "mes_label"])
+                        .rename(
+                            columns={
+                                "anio": "Año",
+                                "mes_label": "Mes",
+                                "productos": "Productos con adjuntos",
+                            }
+                        )
+                        .reset_index(drop=True)
+                    )
+                    st.dataframe(tabla_adj, use_container_width=True)
+
+        # ---------------- Serie mensual de creación / actualización ----------------
+        st.markdown("### 📈 Creación y actualización mensual de productos")
+
+        prod_year_created = prod.loc[
+            mask_created_year & mask_crea_user_valido
+        ].copy()
+        prod_year_updated = prod.loc[
+            mask_updated_year & mask_act_user_valido
+        ].copy()
+
+        if not prod_year_created.empty:
+            prod_year_created["mes"] = prod_year_created["created_at"].dt.to_period("M").astype(str)
+        if not prod_year_updated.empty:
+            prod_year_updated["mes"] = prod_year_updated["updated_at"].dt.to_period("M").astype(str)
+
+        serie_creados = (
+            prod_year_created.groupby("mes")["id"].nunique().reset_index(name="creados")
+            if not prod_year_created.empty
+            else pd.DataFrame(columns=["mes", "creados"])
+        )
+        serie_actualizados = (
+            prod_year_updated.groupby("mes")["id"].nunique().reset_index(name="actualizados")
+            if not prod_year_updated.empty
+            else pd.DataFrame(columns=["mes", "actualizados"])
         )
 
-        chart_users_act = (
-            alt.Chart(act_top)
-            .mark_bar()
-            .encode(
-                x=alt.X(
-                    "productos_actualizados:Q",
-                    title=f"Productos actualizados{sufijo_titulo}",
-                ),
-                y=alt.Y("usuario:N", sort="-x", title="Usuario"),
-                tooltip=[
-                    alt.Tooltip("usuario:N", title="Usuario"),
-                    alt.Tooltip(
-                        "productos_creados:Q",
-                        title="Creados (ids únicos)",
-                    ),
-                    alt.Tooltip(
-                        "productos_actualizados:Q",
-                        title="Actualizados (ids únicos)",
-                    ),
-                    alt.Tooltip(
-                        "total_productos:Q",
-                        title="Total productos trabajados",
-                    ),
-                ],
+        serie = pd.merge(serie_creados, serie_actualizados, on="mes", how="outer").fillna(0)
+
+        if not serie.empty:
+            serie = serie.sort_values("mes")
+
+            serie["mes_num"] = pd.to_datetime(serie["mes"] + "-01").dt.month
+            mapa_meses = {
+                1: "Ene", 2: "Feb", 3: "Mar", 4: "Abr",
+                5: "May", 6: "Jun", 7: "Jul", 8: "Ago",
+                9: "Sep", 10: "Oct", 11: "Nov", 12: "Dic",
+            }
+            serie["mes_label"] = serie["mes_num"].map(mapa_meses)
+
+            serie_long = serie.melt(
+                id_vars=["mes", "mes_num", "mes_label"],
+                value_vars=["creados", "actualizados"],
+                var_name="tipo",
+                value_name="productos"
             )
-            .properties(
-                title=f"Top 20 – Productos actualizados por usuario{sufijo_titulo}",
-                height=400,
+
+            serie_long["tipo"] = serie_long["tipo"].replace(
+                {
+                    "creados": "Creados",
+                    "actualizados": "Actualizados",
+                }
             )
+
+            chart_line = (
+                alt.Chart(serie_long)
+                .mark_line(point=True)
+                .encode(
+                    x=alt.X(
+                        "mes_label:N",
+                        title="Mes",
+                        sort=["Ene", "Feb", "Mar", "Abr", "May", "Jun",
+                              "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"],
+                    ),
+                    y=alt.Y("productos:Q", title="Productos trabajados"),
+                    color=alt.Color("tipo:N", title="Tipo"),
+                    tooltip=[
+                        alt.Tooltip("mes_label:N", title="Mes"),
+                        alt.Tooltip("tipo:N", title="Tipo"),
+                        alt.Tooltip("productos:Q", title="Productos"),
+                    ],
+                )
+                .properties(
+                    title=f"Productos creados y actualizados por mes en {year}",
+                    height=320,
+                )
+            )
+
+            st.altair_chart(chart_line, use_container_width=True)
+        else:
+            st.info(f"No hay productos trabajados (con responsable) en {year}.")
+
+        # ---------------- Actividad por usuario (DINÁMICA) ----------------
+        st.markdown("### 👥 Actividad por usuario (productos trabajados)")
+
+        modo_usuarios = st.radio(
+            "Periodo para el análisis por usuario",
+            ["Solo año seleccionado", "Histórico completo"],
+            horizontal=True,
+            help="Elige si quieres ver la actividad solo para el año elegido o para toda la historia.",
+            key="tab5_modo_usuarios",
         )
 
-        st.altair_chart(chart_users_crea | chart_users_act, use_container_width=True)
+        if modo_usuarios == "Solo año seleccionado":
+            mask_crea_base = mask_created_year & mask_crea_user_valido
+            mask_act_base = mask_updated_year & mask_act_user_valido
+            sufijo_titulo = f" en {year}"
+        else:
+            mask_crea_base = mask_crea_user_valido
+            mask_act_base = mask_act_user_valido
+            sufijo_titulo = " (histórico completo)"
 
-        
-        # ---------- DETALLE POR USUARIO (MÉTRICAS, SIN FILTRO) ----------
-        st.markdown("### 📄 Detalle por usuario")
+        crea_user_df = (
+            prod.loc[
+                mask_crea_base,
+                ["id", "usuario_crea_clean"],
+            ]
+            .drop_duplicates(subset=["id", "usuario_crea_clean"])
+            .rename(columns={"usuario_crea_clean": "usuario"})
+        )
+        crea_user = (
+            crea_user_df.groupby("usuario")["id"]
+            .nunique()
+            .reset_index(name="productos_creados")
+        )
 
-        tabla_users = (
-            act_full.copy()
-            .sort_values(
+        act_user_df = (
+            prod.loc[
+                mask_act_base,
+                ["id", "usuario_actualiza_clean"],
+            ]
+            .drop_duplicates(subset=["id", "usuario_actualiza_clean"])
+            .rename(columns={"usuario_actualiza_clean": "usuario"})
+        )
+        act_user = (
+            act_user_df.groupby("usuario")["id"]
+            .nunique()
+            .reset_index(name="productos_actualizados")
+        )
+
+        act_full = pd.merge(
+            crea_user,
+            act_user,
+            on="usuario",
+            how="outer",
+        ).fillna(0)
+
+        act_full = act_full[
+            (act_full["productos_creados"] > 0) | (act_full["productos_actualizados"] > 0)
+        ].copy()
+
+        act_full["total_productos"] = (
+            act_full["productos_creados"] + act_full["productos_actualizados"]
+        )
+
+        if act_full.empty:
+            if modo_usuarios == "Solo año seleccionado":
+                st.info(f"No hay actividad de usuarios sobre productos en {year}.")
+            else:
+                st.info("No hay actividad de usuarios sobre productos.")
+        else:
+            act_top = act_full.sort_values(
                 ["total_productos", "productos_creados", "productos_actualizados"],
                 ascending=False,
+            ).head(20)
+
+            chart_users_crea = (
+                alt.Chart(act_top)
+                .mark_bar()
+                .encode(
+                    x=alt.X(
+                        "productos_creados:Q",
+                        title=f"Productos creados{sufijo_titulo}",
+                    ),
+                    y=alt.Y("usuario:N", sort="-x", title="Usuario"),
+                    tooltip=[
+                        alt.Tooltip("usuario:N", title="Usuario"),
+                        alt.Tooltip(
+                            "productos_creados:Q",
+                            title="Creados (ids únicos)",
+                        ),
+                        alt.Tooltip(
+                            "productos_actualizados:Q",
+                            title="Actualizados (ids únicos)",
+                        ),
+                        alt.Tooltip(
+                            "total_productos:Q",
+                            title="Total productos trabajados",
+                        ),
+                    ],
+                )
+                .properties(
+                    title=f"Top 20 – Productos creados por usuario{sufijo_titulo}",
+                    height=400,
+                )
             )
-            .rename(
-                columns={
-                    "usuario": "Usuario",
-                    "productos_creados": "Productos creados",
-                    "productos_actualizados": "Productos actualizados",
-                    "total_productos": "Total productos trabajados",
-                }
-            )[
-                [
-                    "Usuario",
-                    "Productos creados",
-                    "Productos actualizados",
-                    "Total productos trabajados",
+
+            chart_users_act = (
+                alt.Chart(act_top)
+                .mark_bar()
+                .encode(
+                    x=alt.X(
+                        "productos_actualizados:Q",
+                        title=f"Productos actualizados{sufijo_titulo}",
+                    ),
+                    y=alt.Y("usuario:N", sort="-x", title="Usuario"),
+                    tooltip=[
+                        alt.Tooltip("usuario:N", title="Usuario"),
+                        alt.Tooltip(
+                            "productos_creados:Q",
+                            title="Creados (ids únicos)",
+                        ),
+                        alt.Tooltip(
+                            "productos_actualizados:Q",
+                            title="Actualizados (ids únicos)",
+                        ),
+                        alt.Tooltip(
+                            "total_productos:Q",
+                            title="Total productos trabajados",
+                        ),
+                    ],
+                )
+                .properties(
+                    title=f"Top 20 – Productos actualizados por usuario{sufijo_titulo}",
+                    height=400,
+                )
+            )
+
+            st.altair_chart(chart_users_crea | chart_users_act, use_container_width=True)
+
+            st.markdown("### 📄 Detalle por usuario")
+
+            tabla_users = (
+                act_full.copy()
+                .sort_values(
+                    ["total_productos", "productos_creados", "productos_actualizados"],
+                    ascending=False,
+                )
+                .rename(
+                    columns={
+                        "usuario": "Usuario",
+                        "productos_creados": "Productos creados",
+                        "productos_actualizados": "Productos actualizados",
+                        "total_productos": "Total productos trabajados",
+                    }
+                )[
+                    [
+                        "Usuario",
+                        "Productos creados",
+                        "Productos actualizados",
+                        "Total productos trabajados",
+                    ]
                 ]
-            ]
-            .reset_index(drop=True)  # 🔥 sin índice
-        )
+                .reset_index(drop=True)
+            )
 
-        st.dataframe(
-            tabla_users.set_index("Usuario"),
-            use_container_width=True,
-        )
-
+            st.dataframe(
+                tabla_users.set_index("Usuario"),
+                use_container_width=True,
+            )
