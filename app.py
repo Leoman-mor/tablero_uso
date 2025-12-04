@@ -57,7 +57,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # -----------------------------------------------------------
-# CARGA DE DATOS
+# CARGA DE DATOS (CON CACHE)
 # -----------------------------------------------------------
 @st.cache_data
 def load_empresas():
@@ -71,7 +71,7 @@ def load_empresas():
 def load_productos():
     dfp = pd.read_csv("productos.csv")
 
-    # Parseo de fechas (incluyendo fecha_adjunto nueva)
+    # Parseo de fechas (incluye la nueva fecha_adjunto)
     for col in ["created_at", "updated_at", "fecha_adjunto"]:
         if col in dfp.columns:
             dfp[col] = pd.to_datetime(dfp[col], errors="coerce")
@@ -79,6 +79,7 @@ def load_productos():
     if "Unnamed: 0" in dfp.columns:
         dfp = dfp.drop(columns=["Unnamed: 0"])
     return dfp
+
 
 # -----------------------------------------------------------
 # BOTÓN PARA ACTUALIZAR DATOS (LIMPIAR CACHE)
@@ -88,8 +89,9 @@ with col_refresh:
     if st.button("🔄 Actualizar datos"):
         load_empresas.clear()
         load_productos.clear()
-        st.experimental_rerun()  # o st.rerun() si usas Streamlit nuevo
+        st.success("Datos recargados desde los CSV.")
 
+# Después del botón, SIEMPRE cargamos desde cache (o desde cero si se limpió)
 df_raw = load_empresas()
 df_prod_raw = load_productos()
 
