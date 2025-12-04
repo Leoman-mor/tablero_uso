@@ -1664,7 +1664,7 @@ with tab5:
                         ],
                     )
                     .properties(
-                        height=260,  # un poco más compacto
+                        height=320, 
                     )
                 )
 
@@ -1675,6 +1675,7 @@ with tab5:
                     .reset_index(name="productos")
                 )
 
+                # Orden correcto de los meses
                 serie_heat["mes_label"] = pd.Categorical(
                     serie_heat["mes_label"],
                     categories=[
@@ -1688,8 +1689,19 @@ with tab5:
                     alt.Chart(serie_heat)
                     .mark_rect()
                     .encode(
-                        x=alt.X("mes_label:N", title="Mes"),
-                        y=alt.Y("anio:O", title="Año"),
+                        x=alt.X(
+                            "mes_label:N",
+                            title="Mes",
+                            sort=[
+                                "Ene", "Feb", "Mar", "Abr", "May", "Jun",
+                                "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"
+                            ],
+                        ),
+                        y=alt.Y(
+                            "anio:O",
+                            title="Año",
+                            sort="ascending",
+                        ),
                         color=alt.Color(
                             "productos:Q",
                             title="Productos con adjuntos",
@@ -1701,7 +1713,7 @@ with tab5:
                         ],
                     )
                     .properties(
-                        height=260,
+                        height=320,
                     )
                 )
 
@@ -1709,7 +1721,6 @@ with tab5:
                     st.altair_chart(chart_anual, use_container_width=True)
                 else:
                     st.altair_chart(heat_chart, use_container_width=True)
-
 
                 with st.expander("📄 Ver tabla resumida de adjuntos por año y mes"):
                     tabla_adj = (
@@ -1724,6 +1735,7 @@ with tab5:
                         .reset_index(drop=True)
                     )
                     st.dataframe(tabla_adj, use_container_width=True)
+
 
         # ---------------- Serie mensual de creación / actualización ----------------
         st.markdown("### 📈 Creación y actualización mensual de productos")
