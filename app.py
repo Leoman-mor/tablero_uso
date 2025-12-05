@@ -1737,86 +1737,269 @@ with tab5:
                     st.dataframe(tabla_adj, use_container_width=True)
 
 
-        # ---------------- Serie mensual de creación / actualización ----------------
+                # ---------------- Serie mensual de creación / actualización ----------------
         st.markdown("### 📈 Creación y actualización mensual de productos")
 
-        prod_year_created = prod.loc[
-            mask_created_year & mask_crea_user_valido
-        ].copy()
-        prod_year_updated = prod.loc[
-            mask_updated_year & mask_act_user_valido
-        ].copy()
-
-        if not prod_year_created.empty:
-            prod_year_created["mes"] = prod_year_created["created_at"].dt.to_period("M").astype(str)
-        if not prod_year_updated.empty:
-            prod_year_updated["mes"] = prod_year_updated["updated_at"].dt.to_period("M").astype(str)
-
-        serie_creados = (
-            prod_year_created.groupby("mes")["id"].nunique().reset_index(name="creados")
-            if not prod_year_created.empty
-            else pd.DataFrame(columns=["mes", "creados"])
-        )
-        serie_actualizados = (
-            prod_year_updated.groupby("mes")["id"].nunique().reset_index(name="actualizados")
-            if not prod_year_updated.empty
-            else pd.DataFrame(columns=["mes", "actualizados"])
+        vista_serie = st.radio(
+            "Periodo para la serie",
+            ["Solo año seleccionado", "Histórico completo"],
+            horizontal=True,
+            key="tab5_vista_serie",
         )
 
-        serie = pd.merge(serie_creados, serie_actualizados, on="mes", how="outer").fillna(0)
+        # ---------------------------------------------------
+        # 1) SOLO AÑO SELECCIONADO → LÍNEA (igual que antes)
+        # ---------------------------------------------------
+        if vista_serie == "Solo año seleccionado":
+            prod_year_created = prod.loc[
+                mask_created_year & mask_crea_user_valido
+            ].copy()
+            prod_year_updated = prod.loc[
+                mask_updated_year & mask_act_user_valido
+            ].copy()
 
-        if not serie.empty:
-            serie = serie.sort_values("mes")
+            if not prod_year_created.empty:
+                prod_year_created["mes"] = (
+                    prod_year_created["created_at"].dt.to_period("M").astype(str)
+                )
+            if not prod_year_updated.empty:
+                prod_year_updated["mes"] = (
+                    prod_year_updated["updated_at"].dt.to_period("M").astype(str)
+                )
 
-            serie["mes_num"] = pd.to_datetime(serie["mes"] + "-01").dt.month
-            mapa_meses = {
-                1: "Ene", 2: "Feb", 3: "Mar", 4: "Abr",
-                5: "May", 6: "Jun", 7: "Jul", 8: "Ago",
-                9: "Sep", 10: "Oct", 11: "Nov", 12: "Dic",
-            }
-            serie["mes_label"] = serie["mes_num"].map(mapa_meses)
-
-            serie_long = serie.melt(
-                id_vars=["mes", "mes_num", "mes_label"],
-                value_vars=["creados", "actualizados"],
-                var_name="tipo",
-                value_name="productos"
+            serie_creados = (
+                prod_year_created.groupby("mes")["id"].nunique().reset_index(name="creados")
+                if not prod_year_created.empty
+                else pd.DataFrame(columns=["mes", "creados"])
+            )
+            serie_actualizados = (
+                prod_year_updated.groupby("mes")["id"].nunique().reset_index(name="actualizados")
+                if not prod_year_updated.empty
+                else pd.DataFrame(columns=["mes", "actualizados"])
             )
 
-            serie_long["tipo"] = serie_long["tipo"].replace(
-                {
-                    "creados": "Creados",
-                    "actualizados": "Actualizados",
+            serie = pd.merge(serie_creados, serie_actualizados, on="mes", how="outer").fillna(0)
+
+            if not serie.empty:
+                serie = serie.sort_values("mes")
+
+                serie["mes_num"] = pd.to_datetime(serie["mes"] + "-01").dt.month
+                mapa_meses = {
+                    1: "Ene", 2: "Feb", 3: "Mar", 4: "Abr",
+                    5: "May", 6: "Jun", 7: "Jul", 8: "Ago",
+                    9: "Sep", 10: "Oct", 11: "Dic",
                 }
-            )
+                # Corrijo mapa_meses (faltaba Nov):
+                mapa_meses[11] = "Nov"
 
-            chart_line = (
-                alt.Chart(serie_long)
-                .mark_line(point=True)
-                .encode(
-                    x=alt.X(
-                        "mes_label:N",
-                        title="Mes",
-                        sort=["Ene", "Feb", "Mar", "Abr", "May", "Jun",
-                              "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"],
-                    ),
-                    y=alt.Y("productos:Q", title="Productos trabajados"),
-                    color=alt.Color("tipo:N", title="Tipo"),
-                    tooltip=[
-                        alt.Tooltip("mes_label:N", title="Mes"),
-                        alt.Tooltip("tipo:N", title="Tipo"),
-                        alt.Tooltip("productos:Q", title="Productos"),
-                    ],
-                )
-                .properties(
-                    title=f"Productos creados y actualizados por mes en {year}",
-                    height=320,
-                )
-            )
+                serie["mes_label"] = serie["mes_num"].map(mapa_meses)
 
-            st.altair_chart(chart_line, use_container_width=True)
+                serie_long = serie.melt(
+                    id_vars=["mes", "mes_num", "mes_label"],
+                    value_vars=["creados", "actualizados"],
+                    var_name="tipo",
+                    value_name="productos",
+                )
+
+                serie_long["tipo"] = serie_long["tipo"].replace(
+                    {"creados": "Creados", "actualizados": "Actualizados"}
+                )
+
+                chart_line = (
+                    alt.Chart(serie_long)
+                    .mark_line(point=True)
+                    .encode(
+                        x=alt.X(
+                            "mes_label:N",
+                            title="Mes",
+                            sort=["Ene", "Feb", "Mar", "Abr", "May", "Jun",
+                                  "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"],
+                        ),
+                        y=alt.Y("productos:Q", title="Productos trabajados"),
+                        color=alt.Color("tipo:N", title="Tipo"),
+                        tooltip=[
+                            alt.Tooltip("mes_label:N", title="Mes"),
+                            alt.Tooltip("tipo:N", title="Tipo"),
+                            alt.Tooltip("productos:Q", title="Productos"),
+                        ],
+                    )
+                    .properties(
+                        title=f"Productos creados y actualizados por mes en {year}",
+                        height=320,
+                    )
+                )
+
+                st.altair_chart(chart_line, use_container_width=True)
+            else:
+                st.info(f"No hay productos trabajados (con responsable) en {year}.")
+
+                # ---------------------------------------------------
+        # 2) HISTÓRICO COMPLETO → DOS GRÁFICAS (CREADOS / ACTUALIZADOS)
+        # ---------------------------------------------------
         else:
-            st.info(f"No hay productos trabajados (con responsable) en {year}.")
+            # Histórico: usamos todos los años donde haya usuario válido
+            crea_hist = prod.loc[mask_crea_user_valido, ["id", "created_at"]].copy()
+            act_hist = prod.loc[mask_act_user_valido, ["id", "updated_at"]].copy()
+
+            if crea_hist.empty and act_hist.empty:
+                st.info("No hay productos trabajados en el histórico.")
+            else:
+                crea_hist["anio"] = crea_hist["created_at"].dt.year
+                crea_hist["mes_num"] = crea_hist["created_at"].dt.month
+
+                act_hist["anio"] = act_hist["updated_at"].dt.year
+                act_hist["mes_num"] = act_hist["updated_at"].dt.month
+
+                # Agrupamos por año y mes (productos únicos)
+                serie_crea_hist = (
+                    crea_hist
+                    .dropna(subset=["anio", "mes_num"])
+                    .drop_duplicates(subset=["id", "anio", "mes_num"])
+                    .groupby(["anio", "mes_num"])["id"]
+                    .nunique()
+                    .reset_index(name="creados")
+                    if not crea_hist.empty
+                    else pd.DataFrame(columns=["anio", "mes_num", "creados"])
+                )
+
+                serie_act_hist = (
+                    act_hist
+                    .dropna(subset=["anio", "mes_num"])
+                    .drop_duplicates(subset=["id", "anio", "mes_num"])
+                    .groupby(["anio", "mes_num"])["id"]
+                    .nunique()
+                    .reset_index(name="actualizados")
+                    if not act_hist.empty
+                    else pd.DataFrame(columns=["anio", "mes_num", "actualizados"])
+                )
+
+                serie_hist = pd.merge(
+                    serie_crea_hist,
+                    serie_act_hist,
+                    on=["anio", "mes_num"],
+                    how="outer",
+                ).fillna(0)
+
+                if serie_hist.empty:
+                    st.info("No hay productos trabajados en el histórico.")
+                else:
+                    serie_hist["total_productos"] = (
+                        serie_hist["creados"] + serie_hist["actualizados"]
+                    )
+
+                    mapa_meses = {
+                        1: "Ene", 2: "Feb", 3: "Mar", 4: "Abr",
+                        5: "May", 6: "Jun", 7: "Jul", 8: "Ago",
+                        9: "Sep", 10: "Oct", 11: "Nov", 12: "Dic",
+                    }
+                    serie_hist["mes_label"] = serie_hist["mes_num"].map(mapa_meses)
+
+                    # --- DOS GRÁFICAS LADO A LADO ---
+                    col_crea, col_act = st.columns(2)
+
+                    with col_crea:
+                        st.markdown("#### 📊 Histórica de productos creados")
+                        chart_crea = (
+                            alt.Chart(serie_hist)
+                            .mark_bar()
+                            .encode(
+                                x=alt.X(
+                                    "mes_label:N",
+                                    title="Mes",
+                                    sort=[
+                                        "Ene", "Feb", "Mar", "Abr", "May", "Jun",
+                                        "Jul", "Ago", "Sep", "Oct", "Nov", "Dic",
+                                    ],
+                                ),
+                                xOffset="anio:N",  # una barrita por año en cada mes
+                                y=alt.Y(
+                                    "creados:Q",
+                                    title="Productos creados",
+                                ),
+                                color=alt.Color(
+                                    "anio:N",
+                                    title="Año",
+                                ),
+                                tooltip=[
+                                    alt.Tooltip("anio:N", title="Año"),
+                                    alt.Tooltip("mes_label:N", title="Mes"),
+                                    alt.Tooltip("creados:Q", title="Creados"),
+                                ],
+                            )
+                            .properties(
+                                height=320,
+                            )
+                        )
+                        st.altair_chart(chart_crea, use_container_width=True)
+
+                    with col_act:
+                        st.markdown("#### 🔁 Histórica de productos actualizados")
+                        chart_act = (
+                            alt.Chart(serie_hist)
+                            .mark_bar()
+                            .encode(
+                                x=alt.X(
+                                    "mes_label:N",
+                                    title="Mes",
+                                    sort=[
+                                        "Ene", "Feb", "Mar", "Abr", "May", "Jun",
+                                        "Jul", "Ago", "Sep", "Oct", "Nov", "Dic",
+                                    ],
+                                ),
+                                xOffset="anio:N",
+                                y=alt.Y(
+                                    "actualizados:Q",
+                                    title="Productos actualizados",
+                                ),
+                                color=alt.Color(
+                                    "anio:N",
+                                    title="Año",
+                                ),
+                                tooltip=[
+                                    alt.Tooltip("anio:N", title="Año"),
+                                    alt.Tooltip("mes_label:N", title="Mes"),
+                                    alt.Tooltip("actualizados:Q", title="Actualizados"),
+                                ],
+                            )
+                            .properties(
+                                height=320,
+                            )
+                        )
+                        st.altair_chart(chart_act, use_container_width=True)
+
+                    # --- TABLA RESUMEN POR AÑO ---
+                    st.markdown("### 📄 Resumen histórico por año")
+
+                    resumen_year = (
+                        serie_hist
+                        .groupby("anio")
+                        .agg(
+                            productos_creados=("creados", "sum"),
+                            productos_actualizados=("actualizados", "sum"),
+                            total_productos=("total_productos", "sum"),
+                            meses_con_movimiento=("mes_num", "nunique"),
+                        )
+                        .reset_index()
+                        .sort_values("anio")
+                    )
+
+                    resumen_year = resumen_year.rename(
+                        columns={
+                            "anio": "Año",
+                            "productos_creados": "Productos creados",
+                            "productos_actualizados": "Productos actualizados",
+                            "total_productos": "Total productos",
+                            "meses_con_movimiento": "Meses con movimiento",
+                        }
+                    )
+
+                    st.dataframe(
+                        resumen_year.set_index("Año"),
+                        use_container_width=True,
+                    )
+
+
+
 
         # ---------------- Actividad por usuario (DINÁMICA) ----------------
         st.markdown("### 👥 Actividad por usuario (productos trabajados)")
