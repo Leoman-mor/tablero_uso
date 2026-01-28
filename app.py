@@ -1505,7 +1505,7 @@ with tab5:
         st.info("No hay información de fechas de creación/actualización de productos.")
     else:
         # ---------------- Selección de año y métricas principales ----------------
-        default_year = 2025 if 2025 in years_all else max(years_all)
+        default_year = 2026 if 2026 in years_all else max(years_all)
         year = st.selectbox(
             "Año a analizar",
             years_all,
