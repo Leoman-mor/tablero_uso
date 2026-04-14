@@ -1,4 +1,4 @@
-# Filas extraídas (stream) - 2026-02-23T11:31:49
+# Filas extraídas (stream) - 2026-04-14T12:46:02
 general_de_equipos_de_colombia_sa_gecolsa				1	2022-10-24	1755				
 general_de_equipos_de_colombia_sa_gecolsa				3	2022-10-24	1755				
 general_de_equipos_de_colombia_sa_gecolsa				4	2022-10-24	1755				
@@ -51,4 +51,3 @@ general_de_equipos_de_colombia_sa_gecolsa				52	2025-04-09	1755
 general_de_equipos_de_colombia_sa_gecolsa				53	2025-04-09	1755				
 general_de_equipos_de_colombia_sa_gecolsa				54	2025-04-09	1755				
 general_de_equipos_de_colombia_sa_gecolsa				55	2025-04-09	1755				
-slq_219090000							1	2025-05-23 14:42:26	2229	0.0
